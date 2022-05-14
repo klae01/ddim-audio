@@ -6,6 +6,11 @@ def get_optimizer(config, parameters):
         return optim.Adam(parameters, lr=config.optim.lr, weight_decay=config.optim.weight_decay,
                           betas=(config.optim.beta1, 0.999), amsgrad=config.optim.amsgrad,
                           eps=config.optim.eps)
+    elif config.optim.optimizer == 'AdaBelief':
+        from adabelief_pytorch import AdaBelief
+        return AdaBelief(parameters, lr=config.optim.lr, betas=(config.optim.beta1, 0.999), eps=config.optim.eps,
+                 weight_decay=config.optim.weight_decay, amsgrad=config.optim.amsgrad, weight_decouple=True, fixed_decay=False, rectify=True,
+                 degenerated_to_sgd=True, print_change_log = False)
     elif config.optim.optimizer == 'RMSProp':
         return optim.RMSprop(parameters, lr=config.optim.lr, weight_decay=config.optim.weight_decay)
     elif config.optim.optimizer == 'SGD':

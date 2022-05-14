@@ -160,12 +160,13 @@ class Diffusion(object):
                 optimizer.zero_grad()
                 loss.backward()
 
-                try:
-                    torch.nn.utils.clip_grad_norm_(
-                        model.parameters(), config.optim.grad_clip
-                    )
-                except Exception:
-                    pass
+                if config.optim.grad_clip is not None:
+                    try:
+                        torch.nn.utils.clip_grad_norm_(
+                            model.parameters(), config.optim.grad_clip
+                        )
+                    except Exception:
+                        pass
                 optimizer.step()
 
                 if self.config.model.ema:
