@@ -41,10 +41,10 @@ sampling:
     last_only: True
 
 optim:
-    weight_decay: 0.00001
+    weight_decay: 0.0000001
     optimizer: "AdaBelief"
     lr: 0.0002
-    beta1: 0.9
+    beta1: 0.5
     amsgrad: false
-    eps: 0.0000000000000001
-    grad_clip: null
+    eps: 0.000000000001
+    grad_clip: 1
