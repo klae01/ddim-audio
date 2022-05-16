@@ -10,6 +10,12 @@ Implements sampling from an implicit model that is trained with the same procedu
 ## Running the Experiments
 The code has been tested on PyTorch 1.6.
 
+### Build model by config
+Build model as onnx format
+```
+python3 model_build_test.py --config {DATASET}.yml --exp {PROJECT_PATH} --doc {MODEL_NAME} --ni
+```
+
 ### Train a model
 Training is exactly the same as DDPM with the following:
 ```
