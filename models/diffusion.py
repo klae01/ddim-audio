@@ -75,36 +75,37 @@ class Downsample(nn.Module):
 
 
 class ResnetBlock(nn.Module):
-    def __init__(self, *, in_channels, out_channels=None, conv_shortcut=False,
+    def __init__(self, *, in_channels, out_channels=None, kernel_size=3, conv_shortcut=False,
                  dropout, temb_channels=512):
         super().__init__()
         self.in_channels = in_channels
         out_channels = in_channels if out_channels is None else out_channels
         self.out_channels = out_channels
+        self.kernel_size = kernel_size
         self.use_conv_shortcut = conv_shortcut
 
         self.norm1 = Normalize(in_channels)
         self.conv1 = torch.nn.Conv2d(in_channels,
                                      out_channels,
-                                     kernel_size=3,
+                                     kernel_size=self.kernel_size,
                                      stride=1,
-                                     padding=1)
+                                     padding=self.kernel_size//2)
         self.temb_proj = torch.nn.Linear(temb_channels,
                                          out_channels)
         self.norm2 = Normalize(out_channels)
         self.dropout = torch.nn.Dropout(dropout)
         self.conv2 = torch.nn.Conv2d(out_channels,
                                      out_channels,
-                                     kernel_size=3,
+                                     kernel_size=self.kernel_size,
                                      stride=1,
-                                     padding=1)
+                                     padding=self.kernel_size//2)
         if self.in_channels != self.out_channels:
             if self.use_conv_shortcut:
                 self.conv_shortcut = torch.nn.Conv2d(in_channels,
                                                      out_channels,
-                                                     kernel_size=3,
+                                                     kernel_size=self.kernel_size,
                                                      stride=1,
-                                                     padding=1)
+                                                     padding=self.kernel_size//2)
             else:
                 self.nin_shortcut = torch.nn.Conv2d(in_channels,
                                                     out_channels,
@@ -208,9 +209,10 @@ class Model(nn.Module):
         self.ch = ch
         self.temb_ch = self.ch*4
         self.num_resolutions = len(ch_mult)
-        self.num_res_blocks = num_res_blocks
+        self.num_res_blocks = num_res_blocks if type(num_res_blocks) is list else [num_res_blocks]  * len(ch_mult)
         self.resolution = resolution
         self.in_channels = in_channels
+        self.krn_size = config.model.krn_size if hasattr(config.model, "krn_size") else [3] * len(ch_mult)
 
         # timestep embedding
         self.temb = nn.Module()
@@ -237,9 +239,11 @@ class Model(nn.Module):
             attn = nn.ModuleList()
             block_in = ch*in_ch_mult[i_level]
             block_out = ch*ch_mult[i_level]
-            for i_block in range(self.num_res_blocks):
+            krn_size = self.krn_size[i_level]
+            for i_block in range(self.num_res_blocks[i_level]):
                 block.append(ResnetBlock(in_channels=block_in,
                                          out_channels=block_out,
+                                         kernel_size=krn_size,
                                          temb_channels=self.temb_ch,
                                          dropout=dropout))
                 block_in = block_out
@@ -272,11 +276,13 @@ class Model(nn.Module):
             attn = nn.ModuleList()
             block_out = ch*ch_mult[i_level]
             skip_in = ch*ch_mult[i_level]
-            for i_block in range(self.num_res_blocks+1):
-                if i_block == self.num_res_blocks:
+            krn_size = self.krn_size[i_level]
+            for i_block in range(self.num_res_blocks[i_level]+1):
+                if i_block == self.num_res_blocks[i_level]:
                     skip_in = ch*in_ch_mult[i_level]
                 block.append(ResnetBlock(in_channels=block_in+skip_in,
                                          out_channels=block_out,
+                                         kernel_size=krn_size,
                                          temb_channels=self.temb_ch,
                                          dropout=dropout))
                 block_in = block_out
@@ -310,7 +316,7 @@ class Model(nn.Module):
         # downsampling
         hs = [self.conv_in(x)]
         for i_level in range(self.num_resolutions):
-            for i_block in range(self.num_res_blocks):
+            for i_block in range(self.num_res_blocks[i_level]):
                 h = self.down[i_level].block[i_block](hs[-1], temb)
                 if len(self.down[i_level].attn) > 0:
                     h = self.down[i_level].attn[i_block](h)
@@ -326,7 +332,7 @@ class Model(nn.Module):
 
         # upsampling
         for i_level in reversed(range(self.num_resolutions)):
-            for i_block in range(self.num_res_blocks+1):
+            for i_block in range(self.num_res_blocks[i_level]+1):
                 h = self.up[i_level].block[i_block](
                     torch.cat([h, hs.pop()], dim=1), temb)
                 if len(self.up[i_level].attn) > 0:
