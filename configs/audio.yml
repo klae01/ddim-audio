@@ -1,6 +1,6 @@
 data:
     dataset: "AUDIO"
-    image_size: 512
+    image_size: 256
     channels: 2
     logit_transform: false
     uniform_dequantization: false
@@ -8,7 +8,7 @@ data:
     random_flip: false
     rescaled: false
     num_workers: 4
-    path: null
+    path: "downloads"
     virtual_samplerate: 48000
 
 model:
@@ -16,10 +16,10 @@ model:
     in_channels: 2
     out_ch: 2
     ch: 32
-    ch_mult: [1, 1, 2, 4, 4, 8]
+    ch_mult: [1, 1, 2, 4, 4, 6]
     krn_size: [3, 3, 7, 13, 3, 3]
     num_res_blocks: [2, 2, 6, 12, 2, 2]
-    attn_resolutions: [16, ]
+    attn_resolutions: [8, ]
     dropout: 0.1
     var_type: fixedlarge
     ema_rate: 0.9999
@@ -33,8 +33,8 @@ diffusion:
     num_diffusion_timesteps: 1000
 
 training:
-    batch_size: 64
-    n_epochs: null
+    batch_size: 6
+    n_epochs: 1000
     n_iters: 5000000
     snapshot_freq: 5000
     validation_freq: 2000
