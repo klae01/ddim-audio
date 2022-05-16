@@ -166,7 +166,7 @@ def get_dataset(args, config):
 
     elif config.data.dataset == "AUDIO":
         import sys, os
-        sys.path.append('../External')
+        sys.path.append('External')
         from SST.utils.dataloader import AudioDataset
                 
         if type(config.data.path) is not str:
@@ -176,7 +176,11 @@ def get_dataset(args, config):
         if not os.listdir(config.data.path):
             raise FileNotFoundError(f"{config.data.path} do not contains files")
         
-        dataset = AudioDataset(
+        class Dummy_Wrapping_Dataset(AudioDataset):
+            def __getitem__(self, *args, **kwargs):
+                x = super().__getitem__(*args, **kwargs)
+                return (torch.from_numpy(x.transpose(2, 0, 1)).float(), 0)
+        dataset = Dummy_Wrapping_Dataset(
             path=config.data.path,
             image_size=config.data.image_size,
             virtual_samplerate=config.data.virtual_samplerate,

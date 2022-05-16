@@ -8,7 +8,7 @@ def get_optimizer(config, parameters):
                           eps=config.optim.eps)
     elif config.optim.optimizer == 'AdaBelief':
         import sys
-        sys.path.append('../External/step-clip-optimizer/clip_opt')
+        sys.path.append('External/step-clip-optimizer')
         from clip_opt import AdaBelief
         return AdaBelief(parameters, lr=config.optim.lr, betas=(config.optim.beta1, 0.999), eps=config.optim.eps,
                  weight_decay=config.optim.weight_decay, amsgrad=config.optim.amsgrad, weight_decouple=True, fixed_decay=False, rectify=False,
