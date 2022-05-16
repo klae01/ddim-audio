@@ -153,21 +153,33 @@ class Diffusion(object):
 
                 tb_logger.add_scalar("loss", loss, global_step=step)
 
-                logging.info(
-                    f"step: {step}, loss: {loss.item()}, data time: {data_time / (i+1)}"
-                )
-
+                loggings = {
+                    "step": step,
+                    "loss": loss.item(),
+                    "data time": data_time / (i + 1),
+                }
                 optimizer.zero_grad()
                 loss.backward()
 
-                try:
-                    torch.nn.utils.clip_grad_norm_(
-                        model.parameters(), config.optim.grad_clip
+                if config.optim.grad_clip is not None:
+                    try:
+                        torch.nn.utils.clip_grad_norm_(
+                            model.parameters(), config.optim.grad_clip
+                        )
+                    except Exception:
+                        pass
+                step_output = optimizer.step()
+                if type(step_output) is dict:
+                    loggings.update(
+                        {K: V for K, V in step_output.items() if V is not None}
                     )
-                except Exception:
-                    pass
-                optimizer.step()
-
+                logging.info(
+                    ", ".join(
+                        (f"{K}: {V:.4f}" if type(V) is float else f"{K}: {V}")
+                        for K, V in loggings.items()
+                    )
+                )
+                
                 if self.config.model.ema:
                     ema_helper.update(model)
 
