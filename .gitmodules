@@ -1,0 +1,8 @@
+[submodule "External/step-clip-optimizer"]
+	path = External/step-clip-optimizer
+	url = https://github.com/klae01/step-clip-optimizer
+	branch = main
+[submodule "External/SST"]
+	path = External/SST
+	url = https://github.com/klae01/SST
+	branch = main
