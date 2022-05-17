@@ -89,9 +89,11 @@ class ResnetBlock(nn.Module):
                                      out_channels,
                                      kernel_size=self.kernel_size,
                                      stride=1,
-                                     padding=self.kernel_size//2)
+                                     padding=self.kernel_size//2,
+                                     bias=False)
         self.temb_proj = torch.nn.Linear(temb_channels,
-                                         out_channels)
+                                         out_channels,
+                                         bias=False)
         self.norm2 = Normalize(out_channels)
         self.dropout = torch.nn.Dropout(dropout)
         self.conv2 = torch.nn.Conv2d(out_channels,

@@ -179,11 +179,12 @@ def get_dataset(args, config):
         class Dummy_Wrapping_Dataset(AudioDataset):
             def __getitem__(self, *args, **kwargs):
                 x = super().__getitem__(*args, **kwargs)
-                return (torch.from_numpy(x.transpose(2, 0, 1)).float(), 0)
+                return x, 0
         dataset = Dummy_Wrapping_Dataset(
             path=config.data.path,
             image_size=config.data.image_size,
             virtual_samplerate=config.data.virtual_samplerate,
+            data_config=vars(config.data.dataset_config)
         )
     
     else:
