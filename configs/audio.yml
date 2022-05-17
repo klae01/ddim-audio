@@ -10,6 +10,11 @@ data:
     num_workers: 4
     path: "downloads"
     virtual_samplerate: 48000
+    dataset_config:
+        use_numpy: False
+        dtype: "torch.FloatTensor"
+        device: "cuda"
+        axis: 0
 
 model:
     type: "simple"
@@ -46,7 +51,7 @@ sampling:
 optim:
     weight_decay: 0.0000001
     optimizer: "AdaBelief"
-    lr: 0.0001
+    lr: 0.0005
     beta1: 0.9
     amsgrad: false
     eps: 0.00000001
