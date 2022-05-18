@@ -1,4 +1,7 @@
 import os
+import sys
+sys.path.append('External')
+
 import logging
 import time
 import glob
@@ -7,15 +10,16 @@ import numpy as np
 import tqdm
 import torch
 import torch.utils.data as data
+from PIL import Image
+from scipy.io.wavfile import write as WAV_write
 
+from SST.utils.wav2img import img2wav
 from models.diffusion import Model
 from models.ema import EMAHelper
 from functions import get_optimizer
 from functions.losses import loss_registry
 from datasets import get_dataset, data_transform, inverse_data_transform
 from functions.ckpt_util import get_ckpt_path
-
-import torchvision.utils as tvu
 
 
 def torch2hwcuint8(x, clip=False):
@@ -255,7 +259,7 @@ class Diffusion(object):
             self.sample_fid(model)
         elif self.args.interpolation:
             self.sample_interpolation(model)
-        elif self.args.sequence:
+        elif self.args.sequence is not None:
             self.sample_sequence(model)
         else:
             raise NotImplementedError("Sample procedeure not defined")
@@ -280,16 +284,18 @@ class Diffusion(object):
                     device=self.device,
                 )
 
-                x = self.sample_image(x, model)
+                x = self.sample_image(x, model, select_index=[-1])[0]
                 x = inverse_data_transform(config, x)
 
                 for i in range(n):
-                    tvu.save_image(
-                        x[i], os.path.join(self.args.image_folder, f"{img_id}.png")
-                    )
+                    path = os.path.join(self.args.image_folder, f"{img_id}")
+                    if self.config.data.dataset == "AUDIO":
+                        raise NotImplementedError("sample_fid with AUDIO dataset is not implemented")
+                    else:
+                        Image.fromarray(x[i]).save(path, format="png")
                     img_id += 1
 
-    def sample_sequence(self, model):
+    def sample_sequence(self, model):            
         config = self.config
 
         x = torch.randn(
@@ -300,17 +306,28 @@ class Diffusion(object):
             device=self.device,
         )
 
+        if self.args.sequence in [-1, 0]:
+            index = range(self.num_timesteps)
+        else:
+            index = np.linspace(1, self.num_timesteps, self.args.sequence, dtype = np.int32)
+            index = set((self.num_timesteps - index).tolist())
+
         # NOTE: This means that we are producing each predicted x0, not x_{t-1} at timestep t.
         with torch.no_grad():
-            _, x = self.sample_image(x, model, last=False)
-
+            _, x = self.sample_image(x, model, select_index = index)
+        
         x = [inverse_data_transform(config, y) for y in x]
+        digits = np.ceil(np.log10(len(x) + 1)).astype(np.int32).tolist()
 
         for i in range(len(x)):
-            for j in range(x[i].size(0)):
-                tvu.save_image(
-                    x[i][j], os.path.join(self.args.image_folder, f"{j}_{i}.png")
-                )
+            for j, img in enumerate(x[i]):
+                path = os.path.join(self.args.image_folder, f"{j}_{i:0{digits}d}")
+                if self.config.data.dataset == "AUDIO":
+                    wav = img2wav(img, self.config.data.virtual_samplerate, dtype=np.uint8)
+                    WAV_write(path+".wav", self.config.data.virtual_samplerate, wav)
+                else:
+                    Image.fromarray(img).save(path, format="png")
+
 
     def sample_interpolation(self, model):
         config = self.config
@@ -347,12 +364,16 @@ class Diffusion(object):
         # Hard coded here, modify to your preferences
         with torch.no_grad():
             for i in range(0, x.size(0), 8):
-                xs.append(self.sample_image(x[i : i + 8], model))
+                xs.append(self.sample_image(x[i : i + 8], model, select_index=[-1])[0])
         x = inverse_data_transform(config, torch.cat(xs, dim=0))
+        digits = np.ceil(np.log10(x.size(0) + 1)).astype(np.int32).tolist()
         for i in range(x.size(0)):
-            tvu.save_image(x[i], os.path.join(self.args.image_folder, f"{i}.png"))
-
-    def sample_image(self, x, model, last=True):
+            path = os.path.join(self.args.image_folder, f"{i:0{digits}d}")
+            if self.config.data.dataset == "AUDIO":
+                raise NotImplementedError("sample_interpolation with AUDIO dataset is not implemented")
+            else:
+                Image.fromarray(x[i]).save(path, format="png")
+    def sample_image(self, x, model, select_index = None):
         try:
             skip = self.args.skip
         except Exception:
@@ -374,7 +395,7 @@ class Diffusion(object):
                 raise NotImplementedError
             from functions.denoising import generalized_steps
 
-            xs = generalized_steps(x, seq, model, self.betas, eta=self.args.eta)
+            xs = generalized_steps(x, seq, model, self.betas, eta=self.args.eta, select_index = select_index)
             x = xs
         elif self.args.sample_type == "ddpm_noisy":
             if self.args.skip_type == "uniform":
@@ -392,11 +413,9 @@ class Diffusion(object):
                 raise NotImplementedError
             from functions.denoising import ddpm_steps
 
-            x = ddpm_steps(x, seq, model, self.betas)
+            x = ddpm_steps(x, seq, model, self.betas, select_index = select_index)
         else:
             raise NotImplementedError
-        if last:
-            x = x[0][-1]
         return x
 
     def test(self):
