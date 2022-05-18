@@ -200,11 +200,11 @@ class Diffusion(object):
                     self.train_step(model, x, optimizer, ema_helper, step, epoch)
         else:
             epoch = start_epoch
-            while 1:
+            while step < self.config.training.n_iters:
                 for x, y in train_loader:
                     step += 1
                     self.train_step(model, x, optimizer, ema_helper, step, epoch)
-                    if step == self.config.training.n_iters:
+                    if step >= self.config.training.n_iters:
                         break
                 epoch += 1
 
