@@ -182,8 +182,10 @@ def get_dataset(args, config):
                 return x, 0
         dataset = Dummy_Wrapping_Dataset(
             path=config.data.path,
+            dtype=np.uint8,
             image_size=config.data.image_size,
             virtual_samplerate=config.data.virtual_samplerate,
+            transform=lambda X: X/255,
             data_config=vars(config.data.dataset_config)
         )
     
@@ -237,5 +239,12 @@ def inverse_data_transform(config, X):
         X = torch.sigmoid(X)
     elif config.data.rescaled:
         X = (X + 1.0) / 2.0
-
-    return torch.clamp(X, 0.0, 1.0)
+    return (
+        torch.clamp(X, 0.0, 1.0)
+        .mul_(255)
+        .add_(0.5)
+        .clamp_(0, 255)
+        .to("cpu", torch.uint8)
+        .permute(1, 2, 0)
+        .numpy()
+    )
