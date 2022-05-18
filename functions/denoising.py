@@ -6,7 +6,6 @@ def compute_alpha(beta, t):
     a = (1 - beta).cumprod(dim=0).index_select(0, t + 1).view(-1, 1, 1, 1)
     return a
 
-
 def generalized_steps(x, seq, model, beta, select_index, **kwargs):
     with torch.no_grad():
         beta = torch.cat([torch.zeros(1).to(beta.device), beta], dim=0)
@@ -17,7 +16,6 @@ def generalized_steps(x, seq, model, beta, select_index, **kwargs):
         x0_preds = []
         xs = [x]
         xt = x.type("torch.cuda.FloatTensor")
-
         t = torch.zeros(n).type("torch.cuda.FloatTensor")
 
         for index, (i, j) in enumerate(zip(reversed(seq), reversed(seq_next))):
@@ -26,17 +24,30 @@ def generalized_steps(x, seq, model, beta, select_index, **kwargs):
             at_next = alpha[int(j) + 1]
 
             et = model(xt, t)
-            x0_t = (xt - et * (1 - at) ** 0.5) / at ** 0.5
+            xt.sub_(et * (1 - at) ** 0.5).div_(at**0.5)
 
-            if select_index is None or index in select_index or index - len(seq) in select_index:
-                x0_preds.append(x0_t.to('cpu'))
+            if (
+                select_index is None
+                or index in select_index
+                or index - len(seq) in select_index
+            ):
+                x0_preds.append(xt.to("cpu"))
 
-            c1 = kwargs.get("eta", 0) * ((1 - at / at_next) * (1 - at_next) / (1 - at)) ** 0.5
-            c2 = ((1 - at_next) - c1 ** 2) ** 0.5
-            xt = xt_next = at_next ** 0.5 * x0_t + c1 * torch.randn_like(x) + c2 * et
+            c1 = (
+                kwargs.get("eta", 0)
+                * ((1 - at / at_next) * (1 - at_next) / (1 - at)) ** 0.5
+            )
+            c2 = ((1 - at_next) - c1**2) ** 0.5
+            xt.mul_(at_next**0.5).add_(et, alpha=c2).add_(
+                torch.randn_like(x), alpha=c1
+            )
 
-            if select_index is None or index in select_index or index - len(seq) in select_index:
-                xs.append(xt_next.to('cpu'))
+            if (
+                select_index is None
+                or index in select_index
+                or index - len(seq) in select_index
+            ):
+                xs.append(xt.to("cpu"))
 
     return xs, x0_preds
 
