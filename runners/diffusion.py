@@ -292,7 +292,7 @@ class Diffusion(object):
                     if self.config.data.dataset == "AUDIO":
                         raise NotImplementedError("sample_fid with AUDIO dataset is not implemented")
                     else:
-                        Image.fromarray(x[i]).save(path, format="png")
+                        Image.fromarray(x[i]).save(path+".png")
                     img_id += 1
 
     def sample_sequence(self, model):            
@@ -307,10 +307,10 @@ class Diffusion(object):
         )
 
         if self.args.sequence in [-1, 0]:
-            index = range(self.num_timesteps)
+            index = range(self.args.timesteps)
         else:
-            index = np.linspace(1, self.num_timesteps, self.args.sequence, dtype = np.int32)
-            index = set((self.num_timesteps - index).tolist())
+            index = np.linspace(1, self.args.timesteps, self.args.sequence, dtype = np.int32)
+            index = set((self.args.timesteps - index).tolist())
 
         # NOTE: This means that we are producing each predicted x0, not x_{t-1} at timestep t.
         with torch.no_grad():
@@ -326,7 +326,7 @@ class Diffusion(object):
                     wav = img2wav(img, self.config.data.virtual_samplerate, dtype=np.uint8)
                     WAV_write(path+".wav", self.config.data.virtual_samplerate, wav)
                 else:
-                    Image.fromarray(img).save(path, format="png")
+                    Image.fromarray(img).save(path+".png")
 
 
     def sample_interpolation(self, model):
@@ -372,7 +372,7 @@ class Diffusion(object):
             if self.config.data.dataset == "AUDIO":
                 raise NotImplementedError("sample_interpolation with AUDIO dataset is not implemented")
             else:
-                Image.fromarray(x[i]).save(path, format="png")
+                Image.fromarray(x[i]).save(path+".png")
     def sample_image(self, x, model, select_index = None):
         try:
             skip = self.args.skip

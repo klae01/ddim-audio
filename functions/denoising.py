@@ -18,7 +18,7 @@ def generalized_steps(x, seq, model, beta, select_index, **kwargs):
         xs = [x]
         xt = x.type("torch.cuda.FloatTensor")
 
-        t = torch.zeros((n, 1, 1, 1)).type("torch.cuda.FloatTensor")
+        t = torch.zeros(n).type("torch.cuda.FloatTensor")
 
         for index, (i, j) in enumerate(zip(reversed(seq), reversed(seq_next))):
             t[...] = i
