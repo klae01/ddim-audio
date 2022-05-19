@@ -1,14 +1,20 @@
-import os
-import torch
 import numbers
+import os
+import sys
+
+import numpy as np
+import torch
 import torchvision.transforms as transforms
 import torchvision.transforms.functional as F
+from torch.utils.data import Subset
 from torchvision.datasets import CIFAR10
+
+sys.path.append('External')
+
+from SST.utils import AudioDataset
 from datasets.celeba import CelebA
 from datasets.ffhq import FFHQ
 from datasets.lsun import LSUN
-from torch.utils.data import Subset
-import numpy as np
 
 
 class Crop(object):
@@ -164,11 +170,7 @@ def get_dataset(args, config):
                 resolution=config.data.image_size,
             )
 
-    elif config.data.dataset == "AUDIO":
-        import sys, os
-        sys.path.append('External')
-        from SST.utils.dataloader import AudioDataset
-                
+    elif config.data.dataset == "AUDIO":                
         if type(config.data.path) is not str:
             raise Exception(f"Need to provide path of data. get {config.data.path}")
         if not os.path.isdir(config.data.path):
@@ -184,7 +186,7 @@ def get_dataset(args, config):
             path=config.data.path,
             image_size=config.data.image_size,
             virtual_samplerate=config.data.virtual_samplerate,
-            data_config=vars(config.data.dataset_config)
+            serve_config=vars(config.data.dataset_config)
         )
     
     else:
@@ -229,7 +231,7 @@ def data_transform(config, X):
     return X
 
 
-def inverse_data_transform(config, X):
+def inverse_data_transform(config, X, as_uint8 = True):
     if hasattr(config, "image_mean"):
         X = X + config.image_mean.to(X.device)[None, ...]
 
@@ -237,5 +239,12 @@ def inverse_data_transform(config, X):
         X = torch.sigmoid(X)
     elif config.data.rescaled:
         X = (X + 1.0) / 2.0
-
-    return torch.clamp(X, 0.0, 1.0)
+    return (
+        torch.clamp(X, 0.0, 1.0)
+        .mul_(255)
+        .add_(0.5)
+        .clamp_(0, 255)
+        .to("cpu", torch.uint8)
+        .permute(0, 2, 3, 1)
+        .numpy()
+    ) if as_uint8 else X.to("cpu").permute(0, 2, 3, 1).numpy()
