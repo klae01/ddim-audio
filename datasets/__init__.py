@@ -231,7 +231,7 @@ def data_transform(config, X):
     return X
 
 
-def inverse_data_transform(config, X):
+def inverse_data_transform(config, X, as_uint8 = True):
     if hasattr(config, "image_mean"):
         X = X + config.image_mean.to(X.device)[None, ...]
 
@@ -247,4 +247,4 @@ def inverse_data_transform(config, X):
         .to("cpu", torch.uint8)
         .permute(0, 2, 3, 1)
         .numpy()
-    )
+    ) if as_uint8 else X.to("cpu").permute(0, 2, 3, 1).numpy()

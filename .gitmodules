@@ -5,4 +5,4 @@
 [submodule "External/SST"]
 	path = External/SST
 	url = https://github.com/klae01/SST
-	branch = feature/linear-scaling
+	branch = main

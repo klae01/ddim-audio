@@ -285,7 +285,7 @@ class Diffusion(object):
                 )
 
                 x = self.sample_image(x, model, select_index=[-1])[0]
-                x = inverse_data_transform(config, x)
+                x = inverse_data_transform(config, x, as_uint8=(self.config.data.dataset not in ["AUDIO"]))
 
                 for i in range(n):
                     path = os.path.join(self.args.image_folder, f"{img_id}")
@@ -318,7 +318,7 @@ class Diffusion(object):
         
         # print('\n'.join(f"{y.min():.4f}, {y.max():.4f}, {y.std():.4f}" for y in x_))
         # print('\n'.join(f"{y.min():.4f}, {y.max():.4f}, {y.std():.4f}" for y in x))
-        x = [inverse_data_transform(config, y) for y in x]
+        x = [inverse_data_transform(config, y, as_uint8=(self.config.data.dataset not in ["AUDIO"])) for y in x]
         digits = np.ceil(np.log10(len(x) + 1)).astype(np.int32).tolist()
 
         for i in range(len(x)):
@@ -368,7 +368,7 @@ class Diffusion(object):
         with torch.no_grad():
             for i in range(0, x.size(0), 8):
                 xs.append(self.sample_image(x[i : i + 8], model, select_index=[-1])[0])
-        x = inverse_data_transform(config, torch.cat(xs, dim=0))
+        x = inverse_data_transform(config, torch.cat(xs, dim=0), as_uint8=(self.config.data.dataset not in ["AUDIO"]))
         digits = np.ceil(np.log10(x.size(0) + 1)).astype(np.int32).tolist()
         for i in range(x.size(0)):
             path = os.path.join(self.args.image_folder, f"{i:0{digits}d}")
