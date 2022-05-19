@@ -11,7 +11,7 @@ from torchvision.datasets import CIFAR10
 
 sys.path.append('External')
 
-from SST.utils.dataset import AudioDataset
+from SST.utils import AudioDataset
 from datasets.celeba import CelebA
 from datasets.ffhq import FFHQ
 from datasets.lsun import LSUN
@@ -186,7 +186,7 @@ def get_dataset(args, config):
             path=config.data.path,
             image_size=config.data.image_size,
             virtual_samplerate=config.data.virtual_samplerate,
-            data_config=vars(config.data.dataset_config)
+            serve_config=vars(config.data.dataset_config)
         )
     
     else:
