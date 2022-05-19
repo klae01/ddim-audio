@@ -13,7 +13,7 @@ import torch.utils.data as data
 from PIL import Image
 from scipy.io.wavfile import write as WAV_write
 
-from SST.utils.wav2img import img2wav
+from SST.utils.wav2img import limit_length_img, pfft2img, pfft2wav
 from models.diffusion import Model
 from models.ema import EMAHelper
 from functions import get_optimizer
@@ -314,8 +314,10 @@ class Diffusion(object):
 
         # NOTE: This means that we are producing each predicted x0, not x_{t-1} at timestep t.
         with torch.no_grad():
-            _, x = self.sample_image(x, model, select_index = index)
+            x_, x = self.sample_image(x, model, select_index = index)
         
+        # print('\n'.join(f"{y.min():.4f}, {y.max():.4f}, {y.std():.4f}" for y in x_))
+        # print('\n'.join(f"{y.min():.4f}, {y.max():.4f}, {y.std():.4f}" for y in x))
         x = [inverse_data_transform(config, y) for y in x]
         digits = np.ceil(np.log10(len(x) + 1)).astype(np.int32).tolist()
 
@@ -323,7 +325,8 @@ class Diffusion(object):
             for j, img in enumerate(x[i]):
                 path = os.path.join(self.args.image_folder, f"{j}_{i:0{digits}d}")
                 if self.config.data.dataset == "AUDIO":
-                    wav = img2wav(img, self.config.data.virtual_samplerate, dtype=np.uint8)
+                    wav = pfft2wav(img, self.config.data.virtual_samplerate, dtype=np.int32)
+                    Image.fromarray(limit_length_img(pfft2img(img))).save(path+".png")
                     WAV_write(path+".wav", self.config.data.virtual_samplerate, wav)
                 else:
                     Image.fromarray(img).save(path+".png")

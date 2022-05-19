@@ -1,14 +1,20 @@
-import os
-import torch
 import numbers
+import os
+import sys
+
+import numpy as np
+import torch
 import torchvision.transforms as transforms
 import torchvision.transforms.functional as F
+from torch.utils.data import Subset
 from torchvision.datasets import CIFAR10
+
+sys.path.append('External')
+
+from SST.utils.dataset import AudioDataset
 from datasets.celeba import CelebA
 from datasets.ffhq import FFHQ
 from datasets.lsun import LSUN
-from torch.utils.data import Subset
-import numpy as np
 
 
 class Crop(object):
@@ -164,11 +170,7 @@ def get_dataset(args, config):
                 resolution=config.data.image_size,
             )
 
-    elif config.data.dataset == "AUDIO":
-        import sys, os
-        sys.path.append('External')
-        from SST.utils.dataloader import AudioDataset
-                
+    elif config.data.dataset == "AUDIO":                
         if type(config.data.path) is not str:
             raise Exception(f"Need to provide path of data. get {config.data.path}")
         if not os.path.isdir(config.data.path):
@@ -182,10 +184,8 @@ def get_dataset(args, config):
                 return x, 0
         dataset = Dummy_Wrapping_Dataset(
             path=config.data.path,
-            dtype=np.uint8,
             image_size=config.data.image_size,
             virtual_samplerate=config.data.virtual_samplerate,
-            transform=lambda X: X/255,
             data_config=vars(config.data.dataset_config)
         )
     
