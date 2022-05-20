@@ -6,3 +6,7 @@
 	path = External/SST
 	url = https://github.com/klae01/SST
 	branch = feature/human-intensity
+[submodule "External/UPU"]
+	path = External/UPU
+	url = https://github.com/klae01/UPU
+	branch = main

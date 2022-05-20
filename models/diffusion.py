@@ -1,6 +1,12 @@
 import math
+import sys
+
 import torch
 import torch.nn as nn
+
+sys.path.append('External')
+
+from UTU.layers.normalize.groupnorm import GroupNorm1D
 
 
 def get_timestep_embedding(timesteps, embedding_dim):
@@ -29,12 +35,19 @@ def nonlinearity(x):
     return x*torch.sigmoid(x)
 
 
-def Normalize(in_channels):
-    return torch.nn.GroupNorm(num_groups=32, num_channels=in_channels, eps=1e-6, affine=True)
+def Normalize(num_channels, num_heights=None, use_1D = False):
+    if use_1D:
+        return GroupNorm1D(
+            num_groups=8,
+            window_size=8,
+            num_heights=num_heights,
+            num_channels=num_channels,
+            eps=1e-6, affine=True)
+    return torch.nn.GroupNorm(num_groups=32, num_channels=num_channels, eps=1e-6, affine=True)
 
 
 class Upsample(nn.Module):
-    def __init__(self, in_channels, with_conv):
+    def __init__(self, in_channels, with_conv, curr_res=None):
         super().__init__()
         self.with_conv = with_conv
         if self.with_conv:
@@ -53,7 +66,7 @@ class Upsample(nn.Module):
 
 
 class Downsample(nn.Module):
-    def __init__(self, in_channels, with_conv):
+    def __init__(self, in_channels, with_conv, curr_res=None):
         super().__init__()
         self.with_conv = with_conv
         if self.with_conv:
@@ -76,7 +89,7 @@ class Downsample(nn.Module):
 
 class ResnetBlock(nn.Module):
     def __init__(self, *, in_channels, out_channels=None, kernel_size=3, conv_shortcut=False,
-                 dropout, temb_channels=512):
+                 dropout, temb_channels=512, curr_res=None, use_1D=None):
         super().__init__()
         self.in_channels = in_channels
         out_channels = in_channels if out_channels is None else out_channels
@@ -84,7 +97,7 @@ class ResnetBlock(nn.Module):
         self.kernel_size = kernel_size
         self.use_conv_shortcut = conv_shortcut
 
-        self.norm1 = Normalize(in_channels)
+        self.norm1 = Normalize(in_channels, curr_res, use_1D)
         self.conv1 = torch.nn.Conv2d(in_channels,
                                      out_channels,
                                      kernel_size=self.kernel_size,
@@ -94,7 +107,7 @@ class ResnetBlock(nn.Module):
         self.temb_proj = torch.nn.Linear(temb_channels,
                                          out_channels,
                                          bias=False)
-        self.norm2 = Normalize(out_channels)
+        self.norm2 = Normalize(out_channels, curr_res, use_1D)
         self.dropout = torch.nn.Dropout(dropout)
         self.conv2 = torch.nn.Conv2d(out_channels,
                                      out_channels,
@@ -242,20 +255,23 @@ class Model(nn.Module):
             block_in = ch*in_ch_mult[i_level]
             block_out = ch*ch_mult[i_level]
             krn_size = self.krn_size[i_level]
+            use_1D = (config.data.dataset == "AUDIO" and i_level==0)
             for i_block in range(self.num_res_blocks[i_level]):
                 block.append(ResnetBlock(in_channels=block_in,
                                          out_channels=block_out,
                                          kernel_size=krn_size,
                                          temb_channels=self.temb_ch,
-                                         dropout=dropout))
+                                         dropout=dropout,
+                                         curr_res=curr_res,
+                                         use_1D=use_1D))
                 block_in = block_out
                 if curr_res in attn_resolutions:
-                    attn.append(AttnBlock(block_in))
+                    attn.append(AttnBlock(block_in, curr_res=curr_res))
             down = nn.Module()
             down.block = block
             down.attn = attn
             if i_level != self.num_resolutions-1:
-                down.downsample = Downsample(block_in, resamp_with_conv)
+                down.downsample = Downsample(block_in, resamp_with_conv, curr_res=curr_res)
                 curr_res = curr_res // 2
             self.down.append(down)
 
@@ -264,12 +280,14 @@ class Model(nn.Module):
         self.mid.block_1 = ResnetBlock(in_channels=block_in,
                                        out_channels=block_in,
                                        temb_channels=self.temb_ch,
-                                       dropout=dropout)
-        self.mid.attn_1 = AttnBlock(block_in)
+                                       dropout=dropout,
+                                       curr_res=curr_res)
+        self.mid.attn_1 = AttnBlock(block_in, curr_res=curr_res)
         self.mid.block_2 = ResnetBlock(in_channels=block_in,
                                        out_channels=block_in,
                                        temb_channels=self.temb_ch,
-                                       dropout=dropout)
+                                       dropout=dropout,
+                                       curr_res=curr_res)
 
         # upsampling
         self.up = nn.ModuleList()
@@ -279,6 +297,7 @@ class Model(nn.Module):
             block_out = ch*ch_mult[i_level]
             skip_in = ch*ch_mult[i_level]
             krn_size = self.krn_size[i_level]
+            use_1D = (config.data.dataset == "AUDIO" and i_level==0)
             for i_block in range(self.num_res_blocks[i_level]+1):
                 if i_block == self.num_res_blocks[i_level]:
                     skip_in = ch*in_ch_mult[i_level]
@@ -286,20 +305,23 @@ class Model(nn.Module):
                                          out_channels=block_out,
                                          kernel_size=krn_size,
                                          temb_channels=self.temb_ch,
-                                         dropout=dropout))
+                                         dropout=dropout,
+                                         curr_res=curr_res,
+                                         use_1D=use_1D))
                 block_in = block_out
                 if curr_res in attn_resolutions:
-                    attn.append(AttnBlock(block_in))
+                    attn.append(AttnBlock(block_in,))
             up = nn.Module()
             up.block = block
             up.attn = attn
             if i_level != 0:
-                up.upsample = Upsample(block_in, resamp_with_conv)
+                up.upsample = Upsample(block_in, resamp_with_conv, curr_res=curr_res)
                 curr_res = curr_res * 2
             self.up.insert(0, up)  # prepend to get consistent order
 
         # end
-        self.norm_out = Normalize(block_in)
+        use_1D = (config.data.dataset == "AUDIO")
+        self.norm_out = Normalize(block_in, curr_res, use_1D=use_1D)
         self.conv_out = torch.nn.Conv2d(block_in,
                                         out_ch,
                                         kernel_size=3,
@@ -341,7 +363,7 @@ class Model(nn.Module):
                     h = self.up[i_level].attn[i_block](h)
             if i_level != 0:
                 h = self.up[i_level].upsample(h)
-
+        
         # end
         h = self.norm_out(h)
         h = nonlinearity(h)
