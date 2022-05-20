@@ -39,7 +39,7 @@ diffusion:
 
 training:
     batch_size: 6
-    n_epochs: 1000
+    n_epochs: null
     n_iters: 5000000
     snapshot_freq: 5000
     validation_freq: 2000

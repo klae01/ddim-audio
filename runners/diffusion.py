@@ -1,4 +1,7 @@
 import os
+import sys
+sys.path.append('External')
+
 import logging
 import time
 import glob
@@ -7,15 +10,16 @@ import numpy as np
 import tqdm
 import torch
 import torch.utils.data as data
+from PIL import Image
+from scipy.io.wavfile import write as WAV_write
 
+from SST.utils.wav2img import limit_length_img, pfft2img, pfft2wav
 from models.diffusion import Model
 from models.ema import EMAHelper
 from functions import get_optimizer
 from functions.losses import loss_registry
 from datasets import get_dataset, data_transform, inverse_data_transform
 from functions.ckpt_util import get_ckpt_path
-
-import torchvision.utils as tvu
 
 
 def torch2hwcuint8(x, clip=False):
@@ -95,20 +99,83 @@ class Diffusion(object):
         elif self.model_var_type == "fixedsmall":
             self.logvar = posterior_variance.clamp(min=1e-20).log()
 
+    def train_step(self, model, x, optimizer, ema_helper, step, epoch):
+        n = x.size(0)
+        model.train()
+
+        x = x.to(self.device)
+        x = data_transform(self.config, x)
+        e = torch.randn_like(x)
+        b = self.betas
+
+        # antithetic sampling
+        t = torch.randint(
+            low=0, high=self.num_timesteps, size=(n // 2 + 1,)
+        ).to(self.device)
+        t = torch.cat([t, self.num_timesteps - t - 1], dim=0)[:n]
+        loss = loss_registry[self.config.model.type](model, x, t, e, b)
+
+        self.config.tb_logger.add_scalar("loss", loss, global_step=step)
+
+        loggings = {
+            "step": step,
+            "loss": loss.item(),
+        }
+        optimizer.zero_grad()
+        loss.backward()
+
+        if self.config.optim.grad_clip is not None:
+            try:
+                torch.nn.utils.clip_grad_norm_(
+                    model.parameters(), self.config.optim.grad_clip
+                )
+            except Exception:
+                pass
+        step_output = optimizer.step()
+        if type(step_output) is dict:
+            loggings.update(
+                {K: V for K, V in step_output.items() if V is not None and K != "loss"}
+            )
+        logging.info(
+            ", ".join(
+                (f"{K}: {V:.4f}" if type(V) is float else f"{K}: {V}")
+                for K, V in loggings.items()
+            )
+        )
+        
+        if self.config.model.ema:
+            ema_helper.update(model)
+
+        if step % self.config.training.snapshot_freq == 0 or step == 1:
+            states = [
+                model.state_dict(),
+                optimizer.state_dict(),
+                epoch,
+                step,
+            ]
+            if self.config.model.ema:
+                states.append(ema_helper.state_dict())
+
+            torch.save(
+                states,
+                os.path.join(self.args.log_path, "ckpt_{}.pth".format(step)),
+            )
+            torch.save(states, os.path.join(self.args.log_path, "ckpt.pth"))
+            
     def train(self):
-        args, config = self.args, self.config
-        tb_logger = self.config.tb_logger
-        dataset, test_dataset = get_dataset(args, config)
+        assert (self.config.training.n_epochs is not None) != (self.config.training.n_iters is not None)
+
+        dataset, test_dataset = get_dataset(self.args, self.config)
         train_loader = data.DataLoader(
             dataset,
-            batch_size=config.training.batch_size,
+            batch_size=self.config.training.batch_size,
             shuffle=True,
-            num_workers=config.data.num_workers,
+            num_workers=self.config.data.num_workers,
         )
-        model = Model(config)
+        model = Model(self.config)
 
         model = model.to(self.device)
-        model = torch.nn.DataParallel(model)
+        # model = torch.nn.DataParallel(model)
 
         optimizer = get_optimizer(self.config, model.parameters())
 
@@ -120,86 +187,30 @@ class Diffusion(object):
 
         start_epoch, step = 0, 0
         if self.args.resume_training:
-            states = torch.load(os.path.join(self.args.log_path, "ckpt.pth"))
-            model.load_state_dict(states[0])
+            states = dict(zip(["model", "optimizer", "epoch", "step", "ema_helper"], torch.load(os.path.join(self.args.log_path, "ckpt.pth"))))
+            model.load_state_dict(states["model"])
 
-            states[1]["param_groups"][0]["eps"] = self.config.optim.eps
-            optimizer.load_state_dict(states[1])
-            start_epoch = states[2]
-            step = states[3]
+            states["optimizer"]["param_groups"][0]["eps"] = self.config.optim.eps
+            optimizer.load_state_dict(states["optimizer"])
+            start_epoch = states["epoch"]
+            step = states["step"]
             if self.config.model.ema:
-                ema_helper.load_state_dict(states[4])
+                ema_helper.load_state_dict(states["ema_helper"])
 
-        for epoch in range(start_epoch, self.config.training.n_epochs):
-            data_start = time.time()
-            data_time = 0
-            for i, (x, y) in enumerate(train_loader):
-                n = x.size(0)
-                data_time += time.time() - data_start
-                model.train()
-                step += 1
-
-                x = x.to(self.device)
-                x = data_transform(self.config, x)
-                e = torch.randn_like(x)
-                b = self.betas
-
-                # antithetic sampling
-                t = torch.randint(
-                    low=0, high=self.num_timesteps, size=(n // 2 + 1,)
-                ).to(self.device)
-                t = torch.cat([t, self.num_timesteps - t - 1], dim=0)[:n]
-                loss = loss_registry[config.model.type](model, x, t, e, b)
-
-                tb_logger.add_scalar("loss", loss, global_step=step)
-
-                loggings = {
-                    "step": step,
-                    "loss": loss.item(),
-                    "data time": data_time / (i + 1),
-                }
-                optimizer.zero_grad()
-                loss.backward()
-
-                if config.optim.grad_clip is not None:
-                    try:
-                        torch.nn.utils.clip_grad_norm_(
-                            model.parameters(), config.optim.grad_clip
-                        )
-                    except Exception:
-                        pass
-                step_output = optimizer.step()
-                if type(step_output) is dict:
-                    loggings.update(
-                        {K: V for K, V in step_output.items() if V is not None}
-                    )
-                logging.info(
-                    ", ".join(
-                        (f"{K}: {V:.4f}" if type(V) is float else f"{K}: {V}")
-                        for K, V in loggings.items()
-                    )
-                )
-                
-                if self.config.model.ema:
-                    ema_helper.update(model)
-
-                if step % self.config.training.snapshot_freq == 0 or step == 1:
-                    states = [
-                        model.state_dict(),
-                        optimizer.state_dict(),
-                        epoch,
-                        step,
-                    ]
-                    if self.config.model.ema:
-                        states.append(ema_helper.state_dict())
-
-                    torch.save(
-                        states,
-                        os.path.join(self.args.log_path, "ckpt_{}.pth".format(step)),
-                    )
-                    torch.save(states, os.path.join(self.args.log_path, "ckpt.pth"))
-
-                data_start = time.time()
+        if self.config.training.n_epochs is not None:
+            for epoch in range(start_epoch, self.config.training.n_epochs):
+                for x, y in train_loader:
+                    step += 1
+                    self.train_step(model, x, optimizer, ema_helper, step, epoch)
+        else:
+            epoch = start_epoch
+            while step < self.config.training.n_iters:
+                for x, y in train_loader:
+                    step += 1
+                    self.train_step(model, x, optimizer, ema_helper, step, epoch)
+                    if step >= self.config.training.n_iters:
+                        break
+                epoch += 1
 
     def sample(self):
         model = Model(self.config)
@@ -218,7 +229,7 @@ class Diffusion(object):
                     map_location=self.config.device,
                 )
             model = model.to(self.device)
-            model = torch.nn.DataParallel(model)
+            # model = torch.nn.DataParallel(model)
             model.load_state_dict(states[0], strict=True)
 
             if self.config.model.ema:
@@ -240,7 +251,7 @@ class Diffusion(object):
             print("Loading checkpoint {}".format(ckpt))
             model.load_state_dict(torch.load(ckpt, map_location=self.device))
             model.to(self.device)
-            model = torch.nn.DataParallel(model)
+            # model = torch.nn.DataParallel(model)
 
         model.eval()
 
@@ -248,7 +259,7 @@ class Diffusion(object):
             self.sample_fid(model)
         elif self.args.interpolation:
             self.sample_interpolation(model)
-        elif self.args.sequence:
+        elif self.args.sequence is not None:
             self.sample_sequence(model)
         else:
             raise NotImplementedError("Sample procedeure not defined")
@@ -273,16 +284,18 @@ class Diffusion(object):
                     device=self.device,
                 )
 
-                x = self.sample_image(x, model)
-                x = inverse_data_transform(config, x)
+                x = self.sample_image(x, model, select_index=[-1])[0]
+                x = inverse_data_transform(config, x, as_uint8=(self.config.data.dataset not in ["AUDIO"]))
 
                 for i in range(n):
-                    tvu.save_image(
-                        x[i], os.path.join(self.args.image_folder, f"{img_id}.png")
-                    )
+                    path = os.path.join(self.args.image_folder, f"{img_id}")
+                    if self.config.data.dataset == "AUDIO":
+                        raise NotImplementedError("sample_fid with AUDIO dataset is not implemented")
+                    else:
+                        Image.fromarray(x[i]).save(path+".png")
                     img_id += 1
 
-    def sample_sequence(self, model):
+    def sample_sequence(self, model):            
         config = self.config
 
         x = torch.randn(
@@ -293,17 +306,31 @@ class Diffusion(object):
             device=self.device,
         )
 
+        if self.args.sequence in [-1, 0]:
+            index = range(self.args.timesteps)
+        else:
+            index = np.linspace(1, self.args.timesteps, self.args.sequence, dtype = np.int32)
+            index = set((self.args.timesteps - index).tolist())
+
         # NOTE: This means that we are producing each predicted x0, not x_{t-1} at timestep t.
         with torch.no_grad():
-            _, x = self.sample_image(x, model, last=False)
-
-        x = [inverse_data_transform(config, y) for y in x]
+            x_, x = self.sample_image(x, model, select_index = index)
+        
+        # print('\n'.join(f"{y.min():.4f}, {y.max():.4f}, {y.std():.4f}" for y in x_))
+        # print('\n'.join(f"{y.min():.4f}, {y.max():.4f}, {y.std():.4f}" for y in x))
+        x = [inverse_data_transform(config, y, as_uint8=(self.config.data.dataset not in ["AUDIO"])) for y in x]
+        digits = np.ceil(np.log10(len(x) + 1)).astype(np.int32).tolist()
 
         for i in range(len(x)):
-            for j in range(x[i].size(0)):
-                tvu.save_image(
-                    x[i][j], os.path.join(self.args.image_folder, f"{j}_{i}.png")
-                )
+            for j, img in enumerate(x[i]):
+                path = os.path.join(self.args.image_folder, f"{j}_{i:0{digits}d}")
+                if self.config.data.dataset == "AUDIO":
+                    wav = pfft2wav(img, self.config.data.virtual_samplerate, dtype=np.int32)
+                    Image.fromarray(limit_length_img(pfft2img(img))).save(path+".png")
+                    WAV_write(path+".wav", self.config.data.virtual_samplerate, wav)
+                else:
+                    Image.fromarray(img).save(path+".png")
+
 
     def sample_interpolation(self, model):
         config = self.config
@@ -340,12 +367,16 @@ class Diffusion(object):
         # Hard coded here, modify to your preferences
         with torch.no_grad():
             for i in range(0, x.size(0), 8):
-                xs.append(self.sample_image(x[i : i + 8], model))
-        x = inverse_data_transform(config, torch.cat(xs, dim=0))
+                xs.append(self.sample_image(x[i : i + 8], model, select_index=[-1])[0])
+        x = inverse_data_transform(config, torch.cat(xs, dim=0), as_uint8=(self.config.data.dataset not in ["AUDIO"]))
+        digits = np.ceil(np.log10(x.size(0) + 1)).astype(np.int32).tolist()
         for i in range(x.size(0)):
-            tvu.save_image(x[i], os.path.join(self.args.image_folder, f"{i}.png"))
-
-    def sample_image(self, x, model, last=True):
+            path = os.path.join(self.args.image_folder, f"{i:0{digits}d}")
+            if self.config.data.dataset == "AUDIO":
+                raise NotImplementedError("sample_interpolation with AUDIO dataset is not implemented")
+            else:
+                Image.fromarray(x[i]).save(path+".png")
+    def sample_image(self, x, model, select_index = None):
         try:
             skip = self.args.skip
         except Exception:
@@ -367,7 +398,7 @@ class Diffusion(object):
                 raise NotImplementedError
             from functions.denoising import generalized_steps
 
-            xs = generalized_steps(x, seq, model, self.betas, eta=self.args.eta)
+            xs = generalized_steps(x, seq, model, self.betas, eta=self.args.eta, select_index = select_index)
             x = xs
         elif self.args.sample_type == "ddpm_noisy":
             if self.args.skip_type == "uniform":
@@ -385,11 +416,9 @@ class Diffusion(object):
                 raise NotImplementedError
             from functions.denoising import ddpm_steps
 
-            x = ddpm_steps(x, seq, model, self.betas)
+            x = ddpm_steps(x, seq, model, self.betas, select_index = select_index)
         else:
             raise NotImplementedError
-        if last:
-            x = x[0][-1]
         return x
 
     def test(self):

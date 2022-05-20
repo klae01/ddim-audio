@@ -85,8 +85,12 @@ def parse_args_and_config():
         default=0.0,
         help="eta used to control the variances of sigma",
     )
-    parser.add_argument("--sequence", action="store_true")
-
+    parser.add_argument(
+        "--sequence",
+        type=int,
+        default=None,
+        help="while sample the sequence, number of intermediates in each case"
+    )
     args = parser.parse_args()
     args.log_path = os.path.join(args.exp, "logs", args.doc)
 

@@ -6,33 +6,54 @@ def compute_alpha(beta, t):
     a = (1 - beta).cumprod(dim=0).index_select(0, t + 1).view(-1, 1, 1, 1)
     return a
 
-
-def generalized_steps(x, seq, model, b, **kwargs):
+def generalized_steps(x, seq, model, beta, select_index, **kwargs):
     with torch.no_grad():
+        beta = torch.cat([torch.zeros(1).to(beta.device), beta], dim=0)
+        alpha = (1 - beta).cumprod(dim=0).to("cpu", torch.float32).numpy().tolist()
+
         n = x.size(0)
         seq_next = [-1] + list(seq[:-1])
         x0_preds = []
         xs = [x]
-        for i, j in zip(reversed(seq), reversed(seq_next)):
-            t = (torch.ones(n) * i).to(x.device)
-            next_t = (torch.ones(n) * j).to(x.device)
-            at = compute_alpha(b, t.long())
-            at_next = compute_alpha(b, next_t.long())
-            xt = xs[-1].to('cuda')
+        xt = x.type("torch.cuda.FloatTensor")
+        t = torch.zeros(n).type("torch.cuda.FloatTensor")
+
+        for index, (i, j) in enumerate(zip(reversed(seq), reversed(seq_next))):
+            t[...] = i
+            at = alpha[int(i) + 1]
+            at_next = alpha[int(j) + 1]
+
             et = model(xt, t)
-            x0_t = (xt - et * (1 - at).sqrt()) / at.sqrt()
-            x0_preds.append(x0_t.to('cpu'))
+            xt.sub_(et * (1 - at) ** 0.5).div_(at**0.5)
+
+            if (
+                select_index is None
+                or index in select_index
+                or index - len(seq) in select_index
+            ):
+                x0_preds.append(xt.to("cpu"))
+
             c1 = (
-                kwargs.get("eta", 0) * ((1 - at / at_next) * (1 - at_next) / (1 - at)).sqrt()
+                kwargs.get("eta", 0)
+                * ((1 - at / at_next) * (1 - at_next) / (1 - at)) ** 0.5
             )
-            c2 = ((1 - at_next) - c1 ** 2).sqrt()
-            xt_next = at_next.sqrt() * x0_t + c1 * torch.randn_like(x) + c2 * et
-            xs.append(xt_next.to('cpu'))
+            c2 = ((1 - at_next) - c1**2) ** 0.5
+            xt.mul_(at_next**0.5).add_(et, alpha=c2).add_(
+                torch.randn_like(x), alpha=c1
+            )
+
+            if (
+                select_index is None
+                or index in select_index
+                or index - len(seq) in select_index
+            ):
+                xs.append(xt.to("cpu"))
 
     return xs, x0_preds
 
-
-def ddpm_steps(x, seq, model, b, **kwargs):
+def ddpm_steps(x, seq, model, b, select_index, **kwargs):
+    if select_index is not None:
+        raise NotImplementedError("Specifying select_index is not implemented in ddpm_steps.")
     with torch.no_grad():
         n = x.size(0)
         seq_next = [-1] + list(seq[:-1])

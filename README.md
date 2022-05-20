@@ -47,7 +47,12 @@ If you want to use the version with the larger variance in DDPM: use the `--samp
 Use `--interpolation` option instead of `--fid`.
 
 #### Sampling from the sequence of images that lead to the sample
-Use `--sequence` option instead.
+Use `--sequence {number of intermediates}` option instead.
+
+If you want to get all samples, `--sequence -1` or `--sequence 0`
+```shell
+python main.py --config {DATASET}.yml --exp {PROJECT_PATH} --use_pretrained --sample --sequence {number of interpolations} --timesteps {STEPS} --eta {ETA} --ni
+```
 
 The above two cases contain some hard-coded lines specific to producing the image, so modify them according to your needs.
 
