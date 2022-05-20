@@ -6,7 +6,7 @@ import torch.nn as nn
 
 sys.path.append('External')
 
-from UTU.layers.normalize.groupnorm import GroupNorm1D
+from UPU.layers.normalize.groupnorm import GroupNorm1D
 
 
 def get_timestep_embedding(timesteps, embedding_dim):
@@ -266,7 +266,7 @@ class Model(nn.Module):
                                          use_1D=use_1D))
                 block_in = block_out
                 if curr_res in attn_resolutions:
-                    attn.append(AttnBlock(block_in, curr_res=curr_res))
+                    attn.append(AttnBlock(block_in))
             down = nn.Module()
             down.block = block
             down.attn = attn
@@ -282,7 +282,7 @@ class Model(nn.Module):
                                        temb_channels=self.temb_ch,
                                        dropout=dropout,
                                        curr_res=curr_res)
-        self.mid.attn_1 = AttnBlock(block_in, curr_res=curr_res)
+        self.mid.attn_1 = AttnBlock(block_in)
         self.mid.block_2 = ResnetBlock(in_channels=block_in,
                                        out_channels=block_in,
                                        temb_channels=self.temb_ch,
