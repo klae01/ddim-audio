@@ -6,24 +6,23 @@ def compute_alpha(beta, t):
     a = (1 - beta).cumprod(dim=0).index_select(0, t + 1).view(-1, 1, 1, 1)
     return a
 
-def generalized_steps(x, seq, model, beta, select_index, **kwargs):
+def generalized_steps(x, seq, model, alpha, select_index, **kwargs):
     with torch.no_grad():
-        beta = torch.cat([torch.zeros(1).to(beta.device), beta], dim=0)
-        alpha = (1 - beta).cumprod(dim=0).to("cpu", torch.float32).numpy().tolist()
+        alpha = alpha.to("cpu", torch.float32).numpy().tolist()
 
         n = x.size(0)
         seq_next = [-1] + list(seq[:-1])
         x0_preds = []
         xs = [x]
         xt = x.type("torch.cuda.FloatTensor")
-        t = torch.zeros(n).type("torch.cuda.FloatTensor")
+        t = torch.zeros(n).type("torch.cuda.LongTensor")
 
         for index, (i, j) in enumerate(zip(reversed(seq), reversed(seq_next))):
             t[...] = i
             at = alpha[int(i) + 1]
             at_next = alpha[int(j) + 1]
 
-            et = model(xt, t)
+            et = model(xt, t.long())
             xt.sub_(et * (1 - at) ** 0.5).div_(at**0.5)
 
             if (
@@ -68,7 +67,7 @@ def ddpm_steps(x, seq, model, b, select_index, **kwargs):
             beta_t = 1 - at / atm1
             x = xs[-1].to('cuda')
 
-            output = model(x, t.float())
+            output = model(x, t.long())
             e = output
 
             x0_from_e = (1.0 / at).sqrt() * x - (1.0 / at - 1).sqrt() * e

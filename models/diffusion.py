@@ -8,27 +8,23 @@ sys.path.append('External')
 
 from UPU.layers.normalize.groupnorm import GroupNorm1D
 
+class TimeEncoding(nn.Module):
+    def __init__(self, channel: int, max_len: int = 1024):
+        super().__init__()
+        
+        position = torch.arange(max_len).unsqueeze(1)
+        div_term = torch.exp(torch.arange(0, channel, 2) * -math.log(10000.0) / channel)
+        te = torch.zeros(max_len, channel)
+        te[:, 0::2] = torch.sin(position * div_term)
+        te[:, 1::2] = torch.cos(position * div_term)
+        self.register_buffer('te', te)
 
-def get_timestep_embedding(timesteps, embedding_dim):
-    """
-    This matches the implementation in Denoising Diffusion Probabilistic Models:
-    From Fairseq.
-    Build sinusoidal embeddings.
-    This matches the implementation in tensor2tensor, but differs slightly
-    from the description in Section 3.5 of "Attention Is All You Need".
-    """
-    assert len(timesteps.shape) == 1
-
-    half_dim = embedding_dim // 2
-    emb = math.log(10000) / (half_dim - 1)
-    emb = torch.exp(torch.arange(half_dim, dtype=torch.float32) * -emb)
-    emb = emb.to(device=timesteps.device)
-    emb = timesteps.float()[:, None] * emb[None, :]
-    emb = torch.cat([torch.sin(emb), torch.cos(emb)], dim=1)
-    if embedding_dim % 2 == 1:  # zero pad
-        emb = torch.nn.functional.pad(emb, (0, 1, 0, 0))
-    return emb
-
+    def forward(self, t: torch.LongTensor) -> torch.Tensor:
+        """
+        Args:
+            t: torch.LongTensor, shape [batch_size]
+        """
+        return self.te.index_select(0, t)
 
 def nonlinearity(x):
     # swish
@@ -230,6 +226,7 @@ class Model(nn.Module):
         self.krn_size = config.model.krn_size if hasattr(config.model, "krn_size") else [3] * len(ch_mult)
 
         # timestep embedding
+        self.tenc = TimeEncoding(self.ch, num_timesteps)
         self.temb = nn.Module()
         self.temb.dense = nn.ModuleList([
             torch.nn.Linear(self.ch,
@@ -332,7 +329,7 @@ class Model(nn.Module):
         assert x.shape[2] == x.shape[3] == self.resolution
 
         # timestep embedding
-        temb = get_timestep_embedding(t, self.ch)
+        temb = self.tenc(t)
         temb = self.temb.dense[0](temb)
         temb = nonlinearity(temb)
         temb = self.temb.dense[1](temb)

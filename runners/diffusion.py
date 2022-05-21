@@ -85,7 +85,7 @@ class Diffusion(object):
         self.num_timesteps = betas.shape[0]
 
         alphas = 1.0 - betas
-        alphas_cumprod = alphas.cumprod(dim=0)
+        alphas_cumprod = self.alphas = alphas.cumprod(dim=0)
         alphas_cumprod_prev = torch.cat(
             [torch.ones(1).to(device), alphas_cumprod[:-1]], dim=0
         )
@@ -98,6 +98,9 @@ class Diffusion(object):
             # [posterior_variance[1:2], betas[1:]], dim=0).log()
         elif self.model_var_type == "fixedsmall":
             self.logvar = posterior_variance.clamp(min=1e-20).log()
+        
+        self.alphas = self.alphas.type(self.config.model.dtype)
+        self.betas = self.betas.type(self.config.model.dtype)
 
     def train_step(self, model, x, optimizer, ema_helper, step, epoch):
         n = x.size(0)
@@ -106,14 +109,14 @@ class Diffusion(object):
         x = x.to(self.device)
         x = data_transform(self.config, x)
         e = torch.randn_like(x)
-        b = self.betas
+        a = self.alphas
 
         # antithetic sampling
         t = torch.randint(
-            low=0, high=self.num_timesteps, size=(n // 2 + 1,)
+            low=0, high=self.num_timesteps, size=((n + 1) // 2,)
         ).to(self.device)
         t = torch.cat([t, self.num_timesteps - t - 1], dim=0)[:n]
-        loss = loss_registry[self.config.model.type](model, x, t, e, b)
+        loss = loss_registry[self.config.model.type](model, x, t, e, a)
 
         self.config.tb_logger.add_scalar("loss", loss, global_step=step)
 
@@ -175,6 +178,7 @@ class Diffusion(object):
         model = Model(self.config)
 
         model = model.to(self.device)
+        model.type(self.config.model.dtype)
         # model = torch.nn.DataParallel(model)
 
         optimizer = get_optimizer(self.config, model.parameters())
@@ -230,6 +234,7 @@ class Diffusion(object):
                     map_location=self.config.device,
                 )
             model = model.to(self.device)
+            model.type(self.config.model.dtype)
             # model = torch.nn.DataParallel(model)
             model.load_state_dict(states[0], strict=True)
 
@@ -240,6 +245,7 @@ class Diffusion(object):
                 ema_helper.ema(model)
             else:
                 ema_helper = None
+            del states
         else:
             # This used the pretrained DDPM model, see https://github.com/pesser/pytorch_diffusion
             if self.config.data.dataset == "CIFAR10":
@@ -399,7 +405,7 @@ class Diffusion(object):
                 raise NotImplementedError
             from functions.denoising import generalized_steps
 
-            xs = generalized_steps(x, seq, model, self.betas, eta=self.args.eta, select_index = select_index)
+            xs = generalized_steps(x, seq, model, self.alphas, eta=self.args.eta, select_index = select_index)
             x = xs
         elif self.args.sample_type == "ddpm_noisy":
             if self.args.skip_type == "uniform":

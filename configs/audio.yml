@@ -12,12 +12,13 @@ data:
     virtual_samplerate: 48000
     dataset_config:
         use_numpy: False
-        dtype: "torch.FloatTensor"
+        dtype: "torch.BFloat16Tensor"
         device: "cuda"
         axis: 0
 
 model:
     type: "simple"
+    dtype: "torch.cuda.BFloat16Tensor"
     in_channels: 2
     out_ch: 2
     ch: 32
