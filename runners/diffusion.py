@@ -118,7 +118,7 @@ class Diffusion(object):
         t = torch.cat([t, self.num_timesteps - t - 1], dim=0)[:n]
         loss = loss_registry[self.config.model.type](model, x, t, e, a)
 
-        self.config.tb_logger.add_scalar("loss", loss, global_step=step)
+        self.config.tb_logger.add_scalar("loss", loss.item(), global_step=step)
 
         loggings = {
             "step": step,

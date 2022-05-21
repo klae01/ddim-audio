@@ -54,8 +54,11 @@ class Upsample(nn.Module):
                                         padding=1)
 
     def forward(self, x):
-        x = torch.nn.functional.interpolate(
-            x, scale_factor=2.0, mode="nearest")
+        # x = torch.nn.functional.interpolate(
+        #     x, scale_factor=2.0, mode="nearest")
+        shape = [x.size(0), x.size(1), 2 * x.size(2), 2* x.size(3)]
+        x = x[:,:, :,None, :, None].expand(-1, -1, -1, 2, -1, 2)
+        x = x.reshape(*shape)
         if self.with_conv:
             x = self.conv(x)
         return x
