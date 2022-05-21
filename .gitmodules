@@ -5,4 +5,8 @@
 [submodule "External/SST"]
 	path = External/SST
 	url = https://github.com/klae01/SST
-	branch = feature/human-intensity
+	branch = main
+[submodule "External/UPU"]
+	path = External/UPU
+	url = https://github.com/klae01/UPU
+	branch = main
