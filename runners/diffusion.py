@@ -196,6 +196,7 @@ class Diffusion(object):
             step = states["step"]
             if self.config.model.ema:
                 ema_helper.load_state_dict(states["ema_helper"])
+            del states
 
         if self.config.training.n_epochs is not None:
             for epoch in range(start_epoch, self.config.training.n_epochs):
