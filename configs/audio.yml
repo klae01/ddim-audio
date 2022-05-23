@@ -18,6 +18,7 @@ data:
 
 model:
     type: "simple"
+    dtype: "torch.cuda.FloatTensor"
     in_channels: 2
     out_ch: 2
     ch: 32
