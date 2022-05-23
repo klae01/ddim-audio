@@ -5,7 +5,7 @@
 [submodule "External/SST"]
 	path = External/SST
 	url = https://github.com/klae01/SST
-	branch = main
+	branch = feature/axis-reordering
 [submodule "External/UPU"]
 	path = External/UPU
 	url = https://github.com/klae01/UPU
