@@ -14,16 +14,16 @@ class Residual_Block(nn.Module):
         super().__init__()
         self.channels = channels
 
-        self.norm = [
+        self.norm = nn.Sequential(*[
             torch.nn.GroupNorm(
                 num_groups=4, num_channels=channels, eps=1e-6, affine=True
             )
             for _ in range(4)
-        ]
-        self.norm[-1].weight.zero_()
+        ])
+        torch.nn.init.zeros_(self.norm[-1].weight)
         self.norm[-1].register_parameter("bias", None)
 
-        self.conv = [
+        self.conv = nn.Sequential(*[
             torch.nn.Conv2d(
                 channels,
                 channels,
@@ -33,7 +33,7 @@ class Residual_Block(nn.Module):
                 bias=True,
             )
             for _ in range(2)
-        ]
+        ])
 
     def forward(self, input, temb):
         NORM = iter(self.norm)
@@ -43,7 +43,7 @@ class Residual_Block(nn.Module):
         x = next(NORM)(x)
         x = torch.nn.functional.silu(x)
         x = next(NORM)(x)
-        x = x + temb
+        x = x + temb[..., None, None]
         x = next(CONV)(x)
         x = torch.nn.functional.silu(x)
         x = next(NORM)(x)
@@ -70,19 +70,20 @@ def Add_Encoding(data):
 
 class Embedding(nn.Module):
     def __init__(self, config):
-        channel_sz = config.transformers.channels
+        super().__init__()
+        channel_sz = config.model.transformers.channels
         seq_length = config.model.t_size
         te = torch.zeros(seq_length, channel_sz)
         Add_Encoding(te)
         self.register_buffer("te", te)
 
-        self.norm = [
+        self.norm = nn.Sequential(*[
             torch.nn.LayerNorm(channel_sz, eps=1e-05, elementwise_affine=True)
             for _ in range(1)
-        ]
-        self.weight = [
+        ])
+        self.weight = nn.Sequential(*[
             torch.nn.Linear(channel_sz, channel_sz, bias=True) for _ in range(1)
-        ]
+        ])
 
     def forward(self, input):
         NORM = iter(self.norm)
@@ -113,33 +114,33 @@ class Model(nn.Module):
         embedding_size += [PR.channels] * len(PR.kernal)
         self.embedding_size = embedding_size
         self.temb = torch.nn.Embedding(
-            self.config.num_diffusion_timesteps, sum(embedding_size)
+            self.config.diffusion.num_diffusion_timesteps, sum(embedding_size)
         )
 
         PR = config.model.preprocessing_residual
         self.conv_in = torch.nn.Conv2d(
-            channels, PR.channels, kernel_size=3, stride=1, padding=1, bias=False
+            raw_channels, PR.channels, kernel_size=3, stride=1, padding=1, bias=False
         )
-        self.preprocessing_residual = [
+        self.preprocessing_residual = nn.Sequential(*[
             Residual_Block(channels=PR.channels, kernel_size=krn) for krn in PR.kernal
-        ]
+        ])
 
         PR = config.model.postprocessing_residual
-        self.postprocessing_residual = [
+        self.postprocessing_residual = nn.Sequential(*[
             Residual_Block(channels=PR.channels, kernel_size=krn) for krn in PR.kernal
-        ]
+        ])
         self.conv_out = torch.nn.Conv2d(
-            PR.channels, channels, kernel_size=3, stride=1, padding=1, bias=True
+            PR.channels, raw_channels, kernel_size=3, stride=1, padding=1, bias=True
         )
-        TR = config.transformers
+        TR = config.model.transformers
         exec(TR.imports)
         self.transformer_embedding = Embedding(config)
-        self.transformer = eval(TR.module)(eval(TR.config)(**TR.kwargs))
+        self.transformer = eval(TR.module)(eval(TR.config)(**vars(TR.kwargs)))
         self.fft_mapper = nn.Linear(
-            config.transformers.channels, PR.channels * config.model.f_size, bias=False
+            config.model.transformers.channels, PR.channels * config.model.f_size, bias=False
         )
 
-        if self.config.model.dtype is not None:
+        if self.config.model.dtype:
             self.type(self.config.model.dtype)
 
     def forward(self, input, t):
@@ -149,30 +150,31 @@ class Model(nn.Module):
         # transformer style: [B, conv_channels, T, F]
         # conv input: [B, C, T, F]
 
-        if self.config.transformers.dtype is not None:
-            self.transformer.type(self.config.transformers.dtype)
-            self.fft_mapper.type(self.config.transformers.dtype)
-            x = input.type(self.config.transformers.dtype)
+        if self.config.model.transformers.dtype:
+            self.transformer_embedding.type(self.config.model.transformers.dtype)
+            self.transformer.type(self.config.model.transformers.dtype)
+            self.fft_mapper.type(self.config.model.transformers.dtype)
+            x = input.type(self.config.model.transformers.dtype)
         else:
             x = input
 
         x = torch.permute(x, (0, 2, 1, 3))
-        x = x.view(*x.shape[:2], -1)
+        x = x.reshape(*x.shape[:2], -1)
         x = self.transformer_embedding(x)
-        x = self.encoder(
+        x = self.transformer(
             x,
             output_hidden_states=False,
             return_dict=True,
         ).last_hidden_state
         x = self.fft_mapper(x)
         x = x.view(*x.shape[:2], -1, self.config.model.f_size)
-        x = torch.permute(input, (0, 2, 1, 3))
+        x = torch.permute(x, (0, 2, 1, 3))
         style = x
 
         temb = self.temb(t)
         temb = torch.split(temb, self.embedding_size, dim=-1)
         temb = iter(temb)
-        x = input
+        x = input.type(self.config.model.dtype)
         x = self.conv_in(x)
         for RES in self.preprocessing_residual:
             x = RES(x, next(temb))

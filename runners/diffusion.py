@@ -99,9 +99,9 @@ class Diffusion(object):
             # [posterior_variance[1:2], betas[1:]], dim=0).log()
         elif self.model_var_type == "fixedsmall":
             self.logvar = posterior_variance.clamp(min=1e-20).log()
-
-        self.alphas = self.alphas.type(self.config.model.dtype)
-        self.betas = self.betas.type(self.config.model.dtype)
+        if self.config.model.dtype:
+            self.alphas = self.alphas.type(self.config.model.dtype)
+            self.betas = self.betas.type(self.config.model.dtype)
 
     def train_step(self, model, x, optimizer, ema_helper, step, epoch):
         n = x.size(0)

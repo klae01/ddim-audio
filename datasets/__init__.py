@@ -31,22 +31,6 @@ class Crop(object):
 
 
 def get_dataset(args, config):
-    if config.data.random_flip is False:
-        tran_transform = test_transform = transforms.Compose(
-            [transforms.Resize(config.data.image_size), transforms.ToTensor()]
-        )
-    else:
-        tran_transform = transforms.Compose(
-            [
-                transforms.Resize(config.data.image_size),
-                transforms.RandomHorizontalFlip(p=0.5),
-                transforms.ToTensor(),
-            ]
-        )
-        test_transform = transforms.Compose(
-            [transforms.Resize(config.data.image_size), transforms.ToTensor()]
-        )
-
     dataset, test_dataset = None, None
     if config.data.dataset == "AUDIO":
         if type(config.data.path) is not str:
@@ -62,7 +46,8 @@ def get_dataset(args, config):
                 return x, 0
 
         dataset = Dummy_Wrapping_Dataset(
-            **config.data.dataset_kwargs,
+            path = config.data.path,
+            **vars(config.data.dataset_kwargs),
         )
 
     else:
