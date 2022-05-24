@@ -125,28 +125,28 @@ class Diffusion(object):
             "step": step,
             "loss": loss.item(),
         }
-        for optimizer in optimizers:
+        for optimizer in optimizers.values():
             optimizer.zero_grad()
         loss.backward()
 
-        if self.config.optim.grad_clip is not None:
-            try:
-                torch.nn.utils.clip_grad_norm_(
-                    model.parameters(), self.config.optim.grad_clip
-                )
-            except Exception:
-                pass
-        for idx, optimizer in enumerate(optimizers):
+        for name, optimizer in optimizers.items():
+            if getattr(self.config.optim, name).grad_clip is not None:
+                try:
+                    torch.nn.utils.clip_grad_norm_(
+                        optimizer.param_groups["params"], getattr(self.config.optim, name).grad_clip
+                    )
+                except Exception:
+                    pass
             step_output = optimizer.step()
             if type(step_output) is dict:
                 loggings.update(
                     {
-                        f"K_{idx}": V
+                        f"{K}_{name}": V
                         for K, V in step_output.items()
                         if V is not None and K != "loss"
                     }
                 )
-        for scheduler in schedulers:
+        for scheduler in schedulers.values():
             scheduler.step()
 
         logging.info(
@@ -192,19 +192,17 @@ class Diffusion(object):
         model = model.to(self.device)
         # model = torch.nn.DataParallel(model)
 
-        optimizers = []
-        schedulers = []
+        optimizers = {}
+        schedulers = {}
         param_group = {}
+        for name in vars(self.config.optim).keys():
+            param_group[name] = []
         for name, param in model.named_parameters():
-            if name != "default":
-                params[name] = []
-        for name, param in model.named_parameters():
-            param_group.get(name, param_group["default"]).append(param)
+            top_level_name = name.split('.')[0]
+            param_group.get(top_level_name, param_group["default"]).append(param)
         for name, params in param_group.items():
-            optimizer = get_optimizer(self.config, params)
-            scheduler = get_optimizer(self.config, optimizer)
-            optimizers.append(optimizer)
-            schedulers.append(scheduler)
+            optimizers[name] = optimizer = get_optimizer(getattr(self.config.optim, name), params)
+            schedulers[name] = scheduler = get_scheduler(getattr(self.config.optim, name), optimizer)
 
         if self.config.model.ema:
             ema_helper = EMAHelper(mu=self.config.model.ema_rate)
