@@ -14,12 +14,13 @@ import torch.utils.data as data
 from PIL import Image
 from scipy.io.wavfile import write as WAV_write
 
+from UTU.signal.denoise import denoise_2d
 from SST.utils.wav2img import limit_length_img, pfft2img, pfft2wav
 from models.diffusion import Model
 from models.ema import EMAHelper
 from functions import get_optimizer
 from functions.losses import loss_registry
-from datasets import get_dataset, data_transform, inverse_data_transform
+from datasets import get_dataset
 from functions.ckpt_util import get_ckpt_path
 
 
@@ -82,14 +83,14 @@ class Diffusion(object):
             beta_end=config.diffusion.beta_end,
             num_diffusion_timesteps=config.diffusion.num_diffusion_timesteps,
         )
-        betas = self.betas = torch.from_numpy(betas).float().to(self.device)
+        alphas = np.concatenate([[1], 1.0 - betas], axis = -1)
+        alphas = torch.from_numpy(alphas).type(self.config.model.dtype)
+        betas = self.betas = torch.from_numpy(betas).type(self.config.model.dtype)
         self.num_timesteps = betas.shape[0]
-
-        alphas = 1.0 - betas
-        alphas_cumprod = self.alphas = alphas.cumprod(dim=0)
-        alphas_cumprod_prev = torch.cat(
-            [torch.ones(1).to(device), alphas_cumprod[:-1]], dim=0
-        )
+        
+        self.alphas = alphas.cumprod(dim=0)
+        alphas_cumprod = self.alphas[1:]
+        alphas_cumprod_prev = self.alphas[:-1]
         posterior_variance = (
             betas * (1.0 - alphas_cumprod_prev) / (1.0 - alphas_cumprod)
         )
@@ -108,7 +109,6 @@ class Diffusion(object):
         model.train()
 
         x = x.to(self.device)
-        x = data_transform(self.config, x)
         e = torch.randn_like(x)
         a = self.alphas
 
@@ -317,9 +317,9 @@ class Diffusion(object):
 
         x = torch.randn(
             8,
-            config.data.channels,
-            config.data.image_size,
-            config.data.image_size,
+            config.model.channels,
+            config.model.t_size,
+            config.model.f_size,
             device=self.device,
         )
 
@@ -334,26 +334,24 @@ class Diffusion(object):
         # NOTE: This means that we are producing each predicted x0, not x_{t-1} at timestep t.
         with torch.no_grad():
             x_, x = self.sample_image(x, model, select_index=index)
-
-        # print('\n'.join(f"{y.min():.4f}, {y.max():.4f}, {y.std():.4f}" for y in x_))
-        # print('\n'.join(f"{y.min():.4f}, {y.max():.4f}, {y.std():.4f}" for y in x))
-        x = [
-            inverse_data_transform(
-                config, y, as_uint8=(self.config.data.dataset not in ["AUDIO"])
-            )
-            for y in x
-        ]
+        
+        if self.config.sampling.denoise:
+            x = [denoise_2d(y) for y in x]
+        x = [y.permute(0, 3, 2, 1).to("cpu").numpy() for y in x]
         digits = np.ceil(np.log10(len(x) + 1)).astype(np.int32).tolist()
 
         for i in range(len(x)):
             for j, img in enumerate(x[i]):
                 path = os.path.join(self.args.image_folder, f"{j}_{i:0{digits}d}")
                 if self.config.data.dataset == "AUDIO":
-                    wav = pfft2wav(
-                        img, self.config.data.virtual_samplerate, dtype=np.int32
-                    )
                     Image.fromarray(limit_length_img(pfft2img(img))).save(path + ".png")
-                    WAV_write(path + ".wav", self.config.data.virtual_samplerate, wav)
+                    wav = pfft2wav(
+                        img,
+                        self.config.data.dataset_kwargs.virtual_samplerate,
+                        dtype=np.int32,
+                        HPI=self.config.data.dataset_kwargs.HPI
+                    )
+                    WAV_write(path + ".wav", self.config.data.dataset_kwargs.virtual_samplerate, wav)
                 else:
                     Image.fromarray(img).save(path + ".png")
 

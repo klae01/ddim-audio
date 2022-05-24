@@ -2,6 +2,8 @@ define: &f_size 256
 define: &low_level_ch 2
 define: &flatten_ch 512
 define: &t_size 1024
+define: &axis_format CTF
+define: &HPI False
 
 
 data:
@@ -14,13 +16,9 @@ data:
         use_numpy: False
         dtype: torch.float
         device: cuda
-        axis: CTF
-    logit_transform: false
-    uniform_dequantization: false
-    gaussian_dequantization: false
-    random_flip: false
-    rescaled: false
-
+        axis: *axis_format
+        HPI: *HPI
+    pfft_format: *axis_format
     num_workers: 4
 
 model:
@@ -74,6 +72,7 @@ training:
 sampling:
     batch_size: 64
     last_only: True
+    denoise: True
 
 optim:
     weight_decay: 0.0000001

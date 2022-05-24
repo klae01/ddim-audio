@@ -6,6 +6,7 @@ def compute_alpha(beta, t):
     a = (1 - beta).cumprod(dim=0).index_select(0, t + 1).view(-1, 1, 1, 1)
     return a
 
+
 def generalized_steps(x, seq, model, alpha, select_index, **kwargs):
     with torch.no_grad():
         alpha = alpha.to("cpu", torch.float32).numpy().tolist()
@@ -50,9 +51,12 @@ def generalized_steps(x, seq, model, alpha, select_index, **kwargs):
 
     return xs, x0_preds
 
+
 def ddpm_steps(x, seq, model, b, select_index, **kwargs):
     if select_index is not None:
-        raise NotImplementedError("Specifying select_index is not implemented in ddpm_steps.")
+        raise NotImplementedError(
+            "Specifying select_index is not implemented in ddpm_steps."
+        )
     with torch.no_grad():
         n = x.size(0)
         seq_next = [-1] + list(seq[:-1])
@@ -65,16 +69,17 @@ def ddpm_steps(x, seq, model, b, select_index, **kwargs):
             at = compute_alpha(betas, t.long())
             atm1 = compute_alpha(betas, next_t.long())
             beta_t = 1 - at / atm1
-            x = xs[-1].to('cuda')
+            x = xs[-1].to("cuda")
 
             output = model(x, t.long())
             e = output
 
             x0_from_e = (1.0 / at).sqrt() * x - (1.0 / at - 1).sqrt() * e
             x0_from_e = torch.clamp(x0_from_e, -1, 1)
-            x0_preds.append(x0_from_e.to('cpu'))
+            x0_preds.append(x0_from_e.to("cpu"))
             mean_eps = (
-                (atm1.sqrt() * beta_t) * x0_from_e + ((1 - beta_t).sqrt() * (1 - atm1)) * x
+                (atm1.sqrt() * beta_t) * x0_from_e
+                + ((1 - beta_t).sqrt() * (1 - atm1)) * x
             ) / (1.0 - at)
 
             mean = mean_eps
@@ -83,5 +88,5 @@ def ddpm_steps(x, seq, model, b, select_index, **kwargs):
             mask = mask.view(-1, 1, 1, 1)
             logvar = beta_t.log()
             sample = mean + mask * torch.exp(0.5 * logvar) * noise
-            xs.append(sample.to('cpu'))
+            xs.append(sample.to("cpu"))
     return xs, x0_preds
