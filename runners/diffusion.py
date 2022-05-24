@@ -14,7 +14,7 @@ import torch.utils.data as data
 from PIL import Image
 from scipy.io.wavfile import write as WAV_write
 
-from UTU.signal.denoise import denoise_2d
+from UPU.signal.denoise import denoise_2d
 from SST.utils.wav2img import limit_length_img, pfft2img, pfft2wav
 from models.diffusion import Model
 from models.ema import EMAHelper
