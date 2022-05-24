@@ -194,12 +194,16 @@ class Diffusion(object):
 
         optimizers = {}
         schedulers = {}
+        param_top_level = {}
         param_group = {}
         for name in vars(self.config.optim).keys():
             param_group[name] = []
+            for I in getattr(self.config.optim, name).top_level_name:
+                param_top_level[I] = name
         for name, param in model.named_parameters():
             top_level_name = name.split('.')[0]
-            param_group.get(top_level_name, param_group["default"]).append(param)
+            group_name = top_level_name if top_level_name in param_top_level else "default"
+            param_group[group_name].append(param)
         for name, params in param_group.items():
             optimizers[name] = optimizer = get_optimizer(getattr(self.config.optim, name), params)
             schedulers[name] = scheduler = get_scheduler(getattr(self.config.optim, name), optimizer)

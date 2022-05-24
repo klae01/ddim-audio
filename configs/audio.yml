@@ -78,29 +78,23 @@ sampling:
     virtual_samplerate: *virtual_samplerate
 
 optim:
-    transformer_embedding:
-        weight_decay: 0.0001
-        optimizer: "AdamW"
-        warmup: 10000
-        lr: 0.00003
-        beta: [0.9, 0.98]
-        amsgrad: false
-        eps: 0.00000001
-        grad_clip: 1
     transformer:
+        top_level_name: [
+            "transformer_embedding", "transformer"
+        ]
         weight_decay: 0.0001
         optimizer: "AdamW"
         warmup: 10000
-        lr: 0.00003
+        lr: 0.00005
         beta: [0.9, 0.98]
         amsgrad: false
-        eps: 0.00000001
+        eps: 0.000000001
         grad_clip: 1
     default:
         weight_decay: 0.001
         optimizer: "Adam"
         warmup: 10000
-        lr: 0.001
+        lr: 0.0003
         beta: [0.9, 0.999]
         amsgrad: false
         eps: 0.00000001
