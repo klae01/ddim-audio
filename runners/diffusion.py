@@ -18,7 +18,7 @@ from UPU.signal.denoise import denoise_2d
 from SST.utils.wav2img import limit_length_img, pfft2img, pfft2wav
 from models.diffusion import Model
 from models.ema import EMAHelper
-from functions import get_optimizer
+from functions import get_optimizer, get_scheduler
 from functions.losses import loss_registry
 from datasets import get_dataset
 from functions.ckpt_util import get_ckpt_path
@@ -83,11 +83,11 @@ class Diffusion(object):
             beta_end=config.diffusion.beta_end,
             num_diffusion_timesteps=config.diffusion.num_diffusion_timesteps,
         )
-        alphas = np.concatenate([[1], 1.0 - betas], axis = -1)
+        alphas = np.concatenate([[1], 1.0 - betas], axis=-1)
         alphas = torch.from_numpy(alphas).type(self.config.model.dtype)
         betas = self.betas = torch.from_numpy(betas).type(self.config.model.dtype)
         self.num_timesteps = betas.shape[0]
-        
+
         self.alphas = alphas.cumprod(dim=0)
         alphas_cumprod = self.alphas[1:]
         alphas_cumprod_prev = self.alphas[:-1]
@@ -104,7 +104,7 @@ class Diffusion(object):
             self.alphas = self.alphas.type(self.config.model.dtype)
             self.betas = self.betas.type(self.config.model.dtype)
 
-    def train_step(self, model, x, optimizer, ema_helper, step, epoch):
+    def train_step(self, model, x, optimizers, schedulers, ema_helper, step, epoch):
         n = x.size(0)
         model.train()
 
@@ -125,21 +125,31 @@ class Diffusion(object):
             "step": step,
             "loss": loss.item(),
         }
-        optimizer.zero_grad()
+        for optimizer in optimizers.values():
+            optimizer.zero_grad()
         loss.backward()
 
-        if self.config.optim.grad_clip is not None:
-            try:
-                torch.nn.utils.clip_grad_norm_(
-                    model.parameters(), self.config.optim.grad_clip
+        for name, optimizer in optimizers.items():
+            if getattr(self.config.optim, name).grad_clip is not None:
+                try:
+                    torch.nn.utils.clip_grad_norm_(
+                        optimizer.param_groups["params"],
+                        getattr(self.config.optim, name).grad_clip,
+                    )
+                except Exception:
+                    pass
+            step_output = optimizer.step()
+            if type(step_output) is dict:
+                loggings.update(
+                    {
+                        f"{K}_{name}": V
+                        for K, V in step_output.items()
+                        if V is not None and K != "loss"
+                    }
                 )
-            except Exception:
-                pass
-        step_output = optimizer.step()
-        if type(step_output) is dict:
-            loggings.update(
-                {K: V for K, V in step_output.items() if V is not None and K != "loss"}
-            )
+        for scheduler in schedulers.values():
+            scheduler.step()
+
         logging.info(
             ", ".join(
                 (f"{K}: {V:.4f}" if type(V) is float else f"{K}: {V}")
@@ -183,7 +193,25 @@ class Diffusion(object):
         model = model.to(self.device)
         # model = torch.nn.DataParallel(model)
 
-        optimizer = get_optimizer(self.config, model.parameters())
+        optimizers = {}
+        schedulers = {}
+        param_top_level = {}
+        param_group = {}
+        for group_name in vars(self.config.optim).keys():
+            param_group[group_name] = []
+            for I in getattr(self.config.optim, group_name).top_level_name:
+                param_top_level[I] = group_name
+        for name, param in model.named_parameters():
+            top_level_name = name.split(".")[0]
+            group_name = param_top_level.get(top_level_name, "default")
+            param_group[group_name].append(param)
+        for name, params in param_group.items():
+            optimizers[name] = optimizer = get_optimizer(
+                getattr(self.config.optim, name), params
+            )
+            schedulers[name] = scheduler = get_scheduler(
+                getattr(self.config.optim, name), optimizer
+            )
 
         if self.config.model.ema:
             ema_helper = EMAHelper(mu=self.config.model.ema_rate)
@@ -213,13 +241,17 @@ class Diffusion(object):
             for epoch in range(start_epoch, self.config.training.n_epochs):
                 for x, y in train_loader:
                     step += 1
-                    self.train_step(model, x, optimizer, ema_helper, step, epoch)
+                    self.train_step(
+                        model, x, optimizers, schedulers, ema_helper, step, epoch
+                    )
         else:
             epoch = start_epoch
             while step < self.config.training.n_iters:
                 for x, y in train_loader:
                     step += 1
-                    self.train_step(model, x, optimizer, ema_helper, step, epoch)
+                    self.train_step(
+                        model, x, optimizers, schedulers, ema_helper, step, epoch
+                    )
                     if step >= self.config.training.n_iters:
                         break
                 epoch += 1
@@ -334,7 +366,7 @@ class Diffusion(object):
         # NOTE: This means that we are producing each predicted x0, not x_{t-1} at timestep t.
         with torch.no_grad():
             x_, x = self.sample_image(x, model, select_index=index)
-        
+
         if self.config.sampling.denoise:
             x = [denoise_2d(y) for y in x]
         x = [y.permute(0, 3, 2, 1).to("cpu").numpy() for y in x]
@@ -347,11 +379,15 @@ class Diffusion(object):
                     Image.fromarray(limit_length_img(pfft2img(img))).save(path + ".png")
                     wav = pfft2wav(
                         img,
-                        self.config.data.dataset_kwargs.virtual_samplerate,
+                        self.config.sampling.virtual_samplerate,
                         dtype=np.int32,
-                        HPI=self.config.data.dataset_kwargs.HPI
+                        HPI=self.config.sampling.HPI,
                     )
-                    WAV_write(path + ".wav", self.config.data.dataset_kwargs.virtual_samplerate, wav)
+                    WAV_write(
+                        path + ".wav",
+                        self.config.data.dataset_kwargs.virtual_samplerate,
+                        wav,
+                    )
                 else:
                     Image.fromarray(img).save(path + ".png")
 

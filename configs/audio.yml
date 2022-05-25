@@ -3,6 +3,7 @@ define: &low_level_ch 2
 define: &flatten_ch 512
 define: &t_size 1024
 define: &axis_format CTF
+define: &virtual_samplerate 48000
 define: &HPI False
 
 
@@ -12,7 +13,7 @@ data:
     dataset_kwargs:
         f_size: *f_size
         t_size: *t_size
-        virtual_samplerate: 48000
+        virtual_samplerate: *virtual_samplerate
         use_numpy: False
         dtype: torch.float
         device: cuda
@@ -63,7 +64,7 @@ diffusion:
     num_diffusion_timesteps: 1000
 
 training:
-    batch_size: 6
+    batch_size: 3
     n_epochs: null
     n_iters: 5000000
     snapshot_freq: 5000
@@ -73,12 +74,29 @@ sampling:
     batch_size: 64
     last_only: True
     denoise: True
+    HPI: *HPI
+    virtual_samplerate: *virtual_samplerate
 
 optim:
-    weight_decay: 0.0000001
-    optimizer: "Adam"
-    lr: 0.0001
-    beta1: 0.9
-    amsgrad: false
-    eps: 0.00000001
-    grad_clip: 1
+    transformer:
+        top_level_name:
+            - transformer_embedding
+            - transformer
+        weight_decay: 0.0001
+        optimizer: "AdamW"
+        warmup: 10000
+        lr: 0.00005
+        beta: [0.9, 0.98]
+        amsgrad: false
+        eps: 0.000000001
+        grad_clip: 1
+    default:
+        top_level_name: []
+        weight_decay: 0.001
+        optimizer: "Adam"
+        warmup: 10000
+        lr: 0.0003
+        beta: [0.9, 0.999]
+        amsgrad: false
+        eps: 0.00000001
+        grad_clip: 1

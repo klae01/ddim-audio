@@ -14,26 +14,31 @@ class Residual_Block(nn.Module):
         super().__init__()
         self.channels = channels
 
-        self.norm = nn.Sequential(*[
-            torch.nn.GroupNorm(
-                num_groups=4, num_channels=channels, eps=1e-6, affine=True
-            )
-            for _ in range(4)
-        ])
+        self.norm = nn.Sequential(
+            *[
+                torch.nn.GroupNorm(
+                    num_groups=4, num_channels=channels, eps=1e-6, affine=True
+                )
+                for _ in range(4)
+            ]
+        )
+        self.norm[2].register_parameter("bias", None)
         torch.nn.init.zeros_(self.norm[-1].weight)
         self.norm[-1].register_parameter("bias", None)
 
-        self.conv = nn.Sequential(*[
-            torch.nn.Conv2d(
-                channels,
-                channels,
-                kernel_size=kernel_size,
-                stride=1,
-                padding=kernel_size // 2,
-                bias=True,
-            )
-            for _ in range(2)
-        ])
+        self.conv = nn.Sequential(
+            *[
+                torch.nn.Conv2d(
+                    channels,
+                    channels,
+                    kernel_size=kernel_size,
+                    stride=1,
+                    padding=kernel_size // 2,
+                    bias=True,
+                )
+                for _ in range(2)
+            ]
+        )
 
     def forward(self, input, temb):
         NORM = iter(self.norm)
@@ -68,7 +73,7 @@ def Add_Encoding(data):
     data[..., 1::2] += torch.cos(x)
 
 
-class Embedding(nn.Module):
+class TransformerEmbedding(nn.Module):
     def __init__(self, config):
         super().__init__()
         channel_sz = config.model.transformers.channels
@@ -77,13 +82,15 @@ class Embedding(nn.Module):
         Add_Encoding(te)
         self.register_buffer("te", te)
 
-        self.norm = nn.Sequential(*[
-            torch.nn.LayerNorm(channel_sz, eps=1e-05, elementwise_affine=True)
-            for _ in range(1)
-        ])
-        self.weight = nn.Sequential(*[
-            torch.nn.Linear(channel_sz, channel_sz, bias=True) for _ in range(1)
-        ])
+        self.norm = nn.Sequential(
+            *[
+                torch.nn.LayerNorm(channel_sz, eps=1e-05, elementwise_affine=True)
+                for _ in range(1)
+            ]
+        )
+        self.weight = nn.Sequential(
+            *[torch.nn.Linear(channel_sz, channel_sz, bias=True) for _ in range(1)]
+        )
 
     def forward(self, input):
         NORM = iter(self.norm)
@@ -101,6 +108,32 @@ class Embedding(nn.Module):
 
         return x
 
+class BetaEmbedding(nn.Module):
+    def __init__(self, seq_length, channel_sz):
+        super().__init__()
+        emb_ch = 512
+        te = torch.zeros(seq_length, emb_ch)
+        Add_Encoding(te)
+        self.register_buffer("te", te)
+
+        self.weight = nn.Sequential(
+            torch.nn.Linear(emb_ch, emb_ch, bias=True),
+            torch.nn.Linear(emb_ch, emb_ch, bias=True),
+            torch.nn.Linear(emb_ch, channel_sz, bias=True)
+        )
+
+    def forward(self, input):
+        WIGT = iter(self.weight)
+
+        x = self.te.index_select(0, input)
+        x = next(WIGT)(x)
+        x = torch.nn.functional.silu(x)
+        x = next(WIGT)(x)
+        x = torch.nn.functional.silu(x)
+        x = next(WIGT)(x)
+
+        return x
+
 
 class Model(nn.Module):
     def __init__(self, config):
@@ -113,7 +146,7 @@ class Model(nn.Module):
         PR = config.model.postprocessing_residual
         embedding_size += [PR.channels] * len(PR.kernal)
         self.embedding_size = embedding_size
-        self.temb = torch.nn.Embedding(
+        self.temb = BetaEmbedding(
             self.config.diffusion.num_diffusion_timesteps, sum(embedding_size)
         )
 
@@ -121,23 +154,34 @@ class Model(nn.Module):
         self.conv_in = torch.nn.Conv2d(
             raw_channels, PR.channels, kernel_size=3, stride=1, padding=1, bias=False
         )
-        self.preprocessing_residual = nn.Sequential(*[
-            Residual_Block(channels=PR.channels, kernel_size=krn) for krn in PR.kernal
-        ])
+        self.preprocessing_residual = nn.Sequential(
+            *[
+                Residual_Block(channels=PR.channels, kernel_size=krn)
+                for krn in PR.kernal
+            ]
+        )
 
         PR = config.model.postprocessing_residual
-        self.postprocessing_residual = nn.Sequential(*[
-            Residual_Block(channels=PR.channels, kernel_size=krn) for krn in PR.kernal
-        ])
+        self.postprocessing_residual = nn.Sequential(
+            *[
+                Residual_Block(channels=PR.channels, kernel_size=krn)
+                for krn in PR.kernal
+            ]
+        )
+        # self.norm_out = torch.nn.GroupNorm(
+        #     num_groups=4, num_channels=PR.channels, eps=1e-6, affine=True
+        # )
         self.conv_out = torch.nn.Conv2d(
             PR.channels, raw_channels, kernel_size=3, stride=1, padding=1, bias=True
         )
         TR = config.model.transformers
         exec(TR.imports)
-        self.transformer_embedding = Embedding(config)
+        self.transformer_embedding = TransformerEmbedding(config)
         self.transformer = eval(TR.module)(eval(TR.config)(**vars(TR.kwargs)))
         self.fft_mapper = nn.Linear(
-            config.model.transformers.channels, PR.channels * config.model.f_size, bias=False
+            config.model.transformers.channels,
+            PR.channels * config.model.f_size,
+            bias=False,
         )
 
         if self.config.model.dtype:
@@ -181,5 +225,8 @@ class Model(nn.Module):
         x = x + style.type(x.type())
         for RES in self.postprocessing_residual:
             x = RES(x, next(temb))
+
+        # x = self.norm_out(x)
+        # x = torch.nn.functional.silu(x)
         x = self.conv_out(x)
         return x
