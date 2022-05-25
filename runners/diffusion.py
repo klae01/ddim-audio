@@ -133,7 +133,8 @@ class Diffusion(object):
             if getattr(self.config.optim, name).grad_clip is not None:
                 try:
                     torch.nn.utils.clip_grad_norm_(
-                        optimizer.param_groups["params"], getattr(self.config.optim, name).grad_clip
+                        optimizer.param_groups["params"],
+                        getattr(self.config.optim, name).grad_clip,
                     )
                 except Exception:
                     pass
@@ -196,17 +197,21 @@ class Diffusion(object):
         schedulers = {}
         param_top_level = {}
         param_group = {}
-        for name in vars(self.config.optim).keys():
-            param_group[name] = []
-            for I in getattr(self.config.optim, name).top_level_name:
-                param_top_level[I] = name
+        for group_name in vars(self.config.optim).keys():
+            param_group[group_name] = []
+            for I in getattr(self.config.optim, group_name).top_level_name:
+                param_top_level[I] = group_name
         for name, param in model.named_parameters():
-            top_level_name = name.split('.')[0]
-            group_name = top_level_name if top_level_name in param_top_level else "default"
+            top_level_name = name.split(".")[0]
+            group_name = param_top_level.get(top_level_name, "default")
             param_group[group_name].append(param)
         for name, params in param_group.items():
-            optimizers[name] = optimizer = get_optimizer(getattr(self.config.optim, name), params)
-            schedulers[name] = scheduler = get_scheduler(getattr(self.config.optim, name), optimizer)
+            optimizers[name] = optimizer = get_optimizer(
+                getattr(self.config.optim, name), params
+            )
+            schedulers[name] = scheduler = get_scheduler(
+                getattr(self.config.optim, name), optimizer
+            )
 
         if self.config.model.ema:
             ema_helper = EMAHelper(mu=self.config.model.ema_rate)
@@ -374,9 +379,9 @@ class Diffusion(object):
                     Image.fromarray(limit_length_img(pfft2img(img))).save(path + ".png")
                     wav = pfft2wav(
                         img,
-                        self.config.data.sampling.virtual_samplerate,
+                        self.config.sampling.virtual_samplerate,
                         dtype=np.int32,
-                        HPI=self.config.data.sampling.HPI,
+                        HPI=self.config.sampling.HPI,
                     )
                     WAV_write(
                         path + ".wav",

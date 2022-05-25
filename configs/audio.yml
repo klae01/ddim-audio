@@ -79,9 +79,9 @@ sampling:
 
 optim:
     transformer:
-        top_level_name: [
-            "transformer_embedding", "transformer"
-        ]
+        top_level_name:
+            - transformer_embedding
+            - transformer
         weight_decay: 0.0001
         optimizer: "AdamW"
         warmup: 10000
@@ -91,6 +91,7 @@ optim:
         eps: 0.000000001
         grad_clip: 1
     default:
+        top_level_name: []
         weight_decay: 0.001
         optimizer: "Adam"
         warmup: 10000
