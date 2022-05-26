@@ -66,8 +66,9 @@ def get_beta_schedule(beta_schedule, *, beta_start, beta_end, num_diffusion_time
 
 
 class parameter_option:
-    config = {}
-    params = []
+    def __init__(self):
+        self.config = {}
+        self.params = []
 
 
 def classify_group(config, model):
@@ -86,7 +87,7 @@ def classify_group(config, model):
         group_name = param_top_level.get(top_level_name, "default")
         param_group[group_name].params.append(param)
 
-    return param_group
+    return {K: V for K, V in param_group.items() if V.params}
 
 
 class Diffusion(object):
