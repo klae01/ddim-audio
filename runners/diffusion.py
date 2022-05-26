@@ -22,7 +22,7 @@ from functions import get_optimizer, get_scheduler
 from functions.losses import loss_registry
 from datasets import get_dataset
 from functions.ckpt_util import get_ckpt_path
-from ..utils import dict2namespace
+from utils import dict2namespace
 
 
 def torch2hwcuint8(x, clip=False):
@@ -73,9 +73,9 @@ class parameter_option:
 def classify_group(config, model):
     param_top_level = {}
     param_group = {}
-    for group_name in vars(config).items():
+    for group_name, sub_config in vars(config).items():
         param_group[group_name] = []
-        sub_config = vars(getattr(config, group_name))
+        sub_config = vars(sub_config)
         for I in sub_config.pop("top_level_name"):
             param_top_level[I] = group_name
         param_group[group_name] = parameter_option()
@@ -221,7 +221,7 @@ class Diffusion(object):
 
         optimizers = {}
         schedulers = {}
-        param_group = classify_group(self.config.optimization.optimizer)
+        param_group = classify_group(self.config.optimization.optimizer, model)
         for name, p_opt in param_group.items():
             optimizers[name] = optimizer = get_optimizer(p_opt.config, p_opt.params)
             scheduler = get_scheduler(p_opt.config, optimizer)
@@ -229,7 +229,7 @@ class Diffusion(object):
                 schedulers[name] = scheduler
 
         grad_group = {}
-        param_group = classify_group(self.config.optimization.grad_norm)
+        param_group = classify_group(self.config.optimization.grad_norm, model)
         for name, p_opt in param_group.items():
             grad_group[name] = p_opt
 

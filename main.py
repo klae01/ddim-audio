@@ -9,7 +9,7 @@ import torch
 import numpy as np
 import torch.utils.tensorboard as tb
 
-from .utils import dict2namespace
+from utils import dict2namespace
 from runners.diffusion import Diffusion
 
 torch.set_printoptions(sci_mode=False)
