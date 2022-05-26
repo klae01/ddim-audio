@@ -20,8 +20,8 @@ def generalized_steps(x, seq, model, alpha, select_index, **kwargs):
 
         for index, (i, j) in enumerate(zip(reversed(seq), reversed(seq_next))):
             t[...] = i
-            at = alpha[int(i) + 1]
-            at_next = alpha[int(j) + 1]
+            at = alpha[int(i)]
+            at_next = alpha[int(j)]
 
             et = model(xt, t.long())
             xt.sub_(et * (1 - at) ** 0.5).div_(at**0.5)

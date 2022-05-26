@@ -114,9 +114,9 @@ class Diffusion(object):
         betas = self.betas = torch.from_numpy(betas).type(self.config.model.dtype)
         self.num_timesteps = betas.shape[0]
 
-        self.alphas = alphas.cumprod(dim=0)
-        alphas_cumprod = self.alphas[1:]
-        alphas_cumprod_prev = self.alphas[:-1]
+        alphas = alphas.cumprod(dim=0)
+        self.alphas = alphas_cumprod = alphas[1:]
+        alphas_cumprod_prev = alphas[:-1]
         posterior_variance = (
             betas * (1.0 - alphas_cumprod_prev) / (1.0 - alphas_cumprod)
         )
