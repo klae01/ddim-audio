@@ -22,6 +22,7 @@ from functions import get_optimizer, get_scheduler
 from functions.losses import loss_registry
 from datasets import get_dataset
 from functions.ckpt_util import get_ckpt_path
+from ..utils import dict2namespace
 
 
 def torch2hwcuint8(x, clip=False):
@@ -64,6 +65,30 @@ def get_beta_schedule(beta_schedule, *, beta_start, beta_end, num_diffusion_time
     return betas
 
 
+class parameter_option:
+    config = {}
+    params = []
+
+
+def classify_group(config, model):
+    param_top_level = {}
+    param_group = {}
+    for group_name in vars(config).items():
+        param_group[group_name] = []
+        sub_config = vars(getattr(config, group_name))
+        for I in sub_config.pop("top_level_name"):
+            param_top_level[I] = group_name
+        param_group[group_name] = parameter_option()
+        param_group[group_name].config = dict2namespace(sub_config)
+
+    for name, param in model.named_parameters():
+        top_level_name = name.split(".")[0]
+        group_name = param_top_level.get(top_level_name, "default")
+        param_group[group_name].params.append(param)
+
+    return param_group
+
+
 class Diffusion(object):
     def __init__(self, args, config, device=None):
         self.args = args
@@ -104,7 +129,9 @@ class Diffusion(object):
             self.alphas = self.alphas.type(self.config.model.dtype)
             self.betas = self.betas.type(self.config.model.dtype)
 
-    def train_step(self, model, x, optimizers, schedulers, ema_helper, step, epoch):
+    def train_step(
+        self, model, x, optimizers, schedulers, grad_group, ema_helper, step, epoch
+    ):
         n = x.size(0)
         model.train()
 
@@ -129,15 +156,14 @@ class Diffusion(object):
             optimizer.zero_grad()
         loss.backward()
 
+        for name, p_opt in grad_group.items():
+            if p_opt.config.grad_clip is not None:
+                torch.nn.utils.clip_grad_norm_(
+                    p_opt.params,
+                    p_opt.config.grad_clip,
+                )
+
         for name, optimizer in optimizers.items():
-            if getattr(self.config.optim, name).grad_clip is not None:
-                try:
-                    torch.nn.utils.clip_grad_norm_(
-                        optimizer.param_groups["params"],
-                        getattr(self.config.optim, name).grad_clip,
-                    )
-                except Exception:
-                    pass
             step_output = optimizer.step()
             if type(step_output) is dict:
                 loggings.update(
@@ -195,23 +221,17 @@ class Diffusion(object):
 
         optimizers = {}
         schedulers = {}
-        param_top_level = {}
-        param_group = {}
-        for group_name in vars(self.config.optim).keys():
-            param_group[group_name] = []
-            for I in getattr(self.config.optim, group_name).top_level_name:
-                param_top_level[I] = group_name
-        for name, param in model.named_parameters():
-            top_level_name = name.split(".")[0]
-            group_name = param_top_level.get(top_level_name, "default")
-            param_group[group_name].append(param)
-        for name, params in param_group.items():
-            optimizers[name] = optimizer = get_optimizer(
-                getattr(self.config.optim, name), params
-            )
-            schedulers[name] = scheduler = get_scheduler(
-                getattr(self.config.optim, name), optimizer
-            )
+        param_group = classify_group(self.config.optimization.optimizer)
+        for name, p_opt in param_group.items():
+            optimizers[name] = optimizer = get_optimizer(p_opt.config, p_opt.params)
+            scheduler = get_scheduler(p_opt.config, optimizer)
+            if scheduler:
+                schedulers[name] = scheduler
+
+        grad_group = {}
+        param_group = classify_group(self.config.optimization.grad_norm)
+        for name, p_opt in param_group.items():
+            grad_group[name] = p_opt
 
         if self.config.model.ema:
             ema_helper = EMAHelper(mu=self.config.model.ema_rate)
@@ -242,7 +262,14 @@ class Diffusion(object):
                 for x, y in train_loader:
                     step += 1
                     self.train_step(
-                        model, x, optimizers, schedulers, ema_helper, step, epoch
+                        model,
+                        x,
+                        optimizers,
+                        schedulers,
+                        grad_group,
+                        ema_helper,
+                        step,
+                        epoch,
                     )
         else:
             epoch = start_epoch
@@ -250,7 +277,14 @@ class Diffusion(object):
                 for x, y in train_loader:
                     step += 1
                     self.train_step(
-                        model, x, optimizers, schedulers, ema_helper, step, epoch
+                        model,
+                        x,
+                        optimizers,
+                        schedulers,
+                        grad_group,
+                        ema_helper,
+                        step,
+                        epoch,
                     )
                     if step >= self.config.training.n_iters:
                         break

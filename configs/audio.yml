@@ -73,25 +73,31 @@ sampling:
     HPI: *HPI
     virtual_samplerate: *virtual_samplerate
 
-optim:
-    transformer:
-        top_level_name:
-            - transformer
-        weight_decay: 0.0001
-        optimizer: "AdamW"
-        warmup: 10000
-        lr: 0.00005
-        beta: [0.9, 0.98]
-        amsgrad: false
-        eps: 0.000000001
-        grad_clip: 1
-    default:
-        top_level_name: []
-        weight_decay: 0.001
-        optimizer: "Adam"
-        warmup: 10000
-        lr: 0.0003
-        beta: [0.9, 0.999]
-        amsgrad: false
-        eps: 0.00000001
-        grad_clip: 1
+optimization:
+    optimizer:
+        transformer:
+            top_level_name: []
+            weight_decay: 0.0001
+            optimizer: "AdamW"
+            warmup: 10000
+            lr: 0.00005
+            beta: [0.9, 0.98]
+            amsgrad: false
+            eps: 0.000000001
+        default:
+            top_level_name: []
+            weight_decay: 0.0000001
+            optimizer: "Adam"
+            warmup: null
+            lr: 0.00005
+            beta: [0.9, 0.999]
+            amsgrad: false
+            eps: 0.00000001
+    grad_norm:
+        transformer:
+            top_level_name: []
+            grad_clip: null
+        default:
+            top_level_name: []
+            grad_clip: 1
+
