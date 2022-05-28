@@ -9,7 +9,7 @@ def compute_alpha(beta, t):
 
 def generalized_steps(x, seq, model, alpha, select_index, **kwargs):
     with torch.no_grad():
-        alpha = alpha.to("cpu", torch.float32).numpy().tolist()
+        alpha = [1.] + alpha.to("cpu", torch.float32).numpy().tolist()
 
         n = x.size(0)
         seq_next = [-1] + list(seq[:-1])
@@ -20,8 +20,8 @@ def generalized_steps(x, seq, model, alpha, select_index, **kwargs):
 
         for index, (i, j) in enumerate(zip(reversed(seq), reversed(seq_next))):
             t[...] = i
-            at = alpha[int(i) + 1]
-            at_next = alpha[int(j) + 1]
+            at = alpha[int(i)+1]
+            at_next = alpha[int(j)+1]
 
             et = model(xt, t.long())
             xt.sub_(et * (1 - at) ** 0.5).div_(at**0.5)
