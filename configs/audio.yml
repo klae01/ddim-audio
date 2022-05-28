@@ -37,7 +37,7 @@ model:
             hidden_act: gelu_new
             hidden_dropout_prob: 0.1
             initializer_range: 0.02
-            layer_norm_eps: 0.000000000001
+            layer_norm_eps: 0.000001
         channels: 512
         dtype: torch.cuda.FloatTensor
 
@@ -73,31 +73,37 @@ sampling:
     HPI: *HPI
     virtual_samplerate: *virtual_samplerate
 
+    num_samples: 2
+    t_size: 8192
+
 optimization:
     optimizer:
         transformer:
-            top_level_name: []
+            top_level_name:
+                - transformer
             weight_decay: 0.0001
             optimizer: "AdamW"
             warmup: 10000
-            lr: 0.00005
-            beta: [0.9, 0.98]
+            lr: 0.0005
+            beta: [0.9, 0.998]
             amsgrad: false
-            eps: 0.000000001
+            eps: 0.000001
         default:
             top_level_name: []
-            weight_decay: 0.0000001
-            optimizer: "Adam"
-            warmup: null
-            lr: 0.00005
+            weight_decay: 0.00001
+            optimizer: "AdaBelief"
+            warmup: 1000
+            lr: 0.0003
             beta: [0.9, 0.999]
             amsgrad: false
             eps: 0.00000001
+            clip_step: null
+            norm_ord: 2
+    
     grad_norm:
         transformer:
             top_level_name: []
-            grad_clip: null
+            grad_clip: 1
         default:
             top_level_name: []
             grad_clip: 1
-
