@@ -25,7 +25,7 @@ def get_dataset(args, config):
                 return x, 0
 
         dataset = Dummy_Wrapping_Dataset(
-            path = config.data.path,
+            path=config.data.path,
             **vars(config.data.dataset_kwargs),
         )
 

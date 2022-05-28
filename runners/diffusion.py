@@ -1,27 +1,25 @@
+import glob
+import logging
 import os
 import sys
-
-sys.path.append("External")
-
-import logging
 import time
-import glob
 
 import numpy as np
-import tqdm
 import torch
 import torch.utils.data as data
+import tqdm
+from datasets import get_dataset
+from functions import get_optimizer, get_scheduler
+from functions.ckpt_util import get_ckpt_path
+from functions.losses import loss_registry
+from models.diffusion import Model
+from models.ema import EMAHelper
 from PIL import Image
 from scipy.io.wavfile import write as WAV_write
 
-from UPU.signal.denoise import denoise_2d
+sys.path.append("External")
 from SST.utils.wav2img import limit_length_img, pfft2img, pfft2wav
-from models.diffusion import Model
-from models.ema import EMAHelper
-from functions import get_optimizer, get_scheduler
-from functions.losses import loss_registry
-from datasets import get_dataset
-from functions.ckpt_util import get_ckpt_path
+from UPU.signal.denoise import denoise_2d
 from utils import dict2namespace
 
 
