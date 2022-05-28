@@ -41,9 +41,7 @@ def get_optimizer(config, parameters):
             norm_ord=config.norm_ord,
         )
     elif config.optimizer == "RMSProp":
-        return optim.RMSprop(
-            parameters, lr=config.lr, weight_decay=config.weight_decay
-        )
+        return optim.RMSprop(parameters, lr=config.lr, weight_decay=config.weight_decay)
     elif config.optimizer == "SGD":
         return optim.SGD(parameters, lr=config.lr, momentum=0.9)
     else:
@@ -53,9 +51,10 @@ def get_optimizer(config, parameters):
 
 
 def get_scheduler(config, optimizer):
-    return LambdaLR(
-        optimizer,
-        lambda step: min(
-            ((1 + step) / config.warmup) ** -0.5, (1 + step) / config.warmup
-        ),
-    )
+    if config.warmup:
+        return LambdaLR(
+            optimizer,
+            lambda step: min(
+                ((1 + step) / config.warmup) ** -0.5, (1 + step) / config.warmup
+            ),
+        )

@@ -31,31 +31,27 @@ model:
         module: FNetEncoder
         config: transformers.FNetConfig
         kwargs:
-            hidden_size: *flatten_ch
+            hidden_size: 512
             num_hidden_layers: 12
             intermediate_size: 2048
             hidden_act: gelu_new
             hidden_dropout_prob: 0.1
             initializer_range: 0.02
             layer_norm_eps: 0.000000000001
-        channels: *flatten_ch
+        channels: 512
         dtype: torch.cuda.FloatTensor
 
     channels: *low_level_ch
     t_size: *t_size
     f_size: *f_size
 
-    preprocessing_residual:
-        channels: 32
-        kernal: [3, 3, 3, 3, 3, 3]
-    postprocessing_residual:
-        channels: 32
-        kernal: [3, 3, 3, 3, 3, 3]
+    ch: [32, 64, 96, 128, 192, 256]
+    krn: [3, 3, 3, 3, 3, 3]
+    res: [2, 2, 3, 3, 3, 3]
     
     var_type: fixedlarge
     ema_rate: 0.9999
     ema: True
-    resamp_with_conv: True
 
 diffusion:
     beta_schedule: linear
@@ -77,26 +73,31 @@ sampling:
     HPI: *HPI
     virtual_samplerate: *virtual_samplerate
 
-optim:
-    transformer:
-        top_level_name:
-            - transformer_embedding
-            - transformer
-        weight_decay: 0.0001
-        optimizer: "AdamW"
-        warmup: 10000
-        lr: 0.00005
-        beta: [0.9, 0.98]
-        amsgrad: false
-        eps: 0.000000001
-        grad_clip: 1
-    default:
-        top_level_name: []
-        weight_decay: 0.001
-        optimizer: "Adam"
-        warmup: 10000
-        lr: 0.0003
-        beta: [0.9, 0.999]
-        amsgrad: false
-        eps: 0.00000001
-        grad_clip: 1
+optimization:
+    optimizer:
+        transformer:
+            top_level_name: []
+            weight_decay: 0.0001
+            optimizer: "AdamW"
+            warmup: 10000
+            lr: 0.00005
+            beta: [0.9, 0.98]
+            amsgrad: false
+            eps: 0.000000001
+        default:
+            top_level_name: []
+            weight_decay: 0.0000001
+            optimizer: "Adam"
+            warmup: null
+            lr: 0.00005
+            beta: [0.9, 0.999]
+            amsgrad: false
+            eps: 0.00000001
+    grad_norm:
+        transformer:
+            top_level_name: []
+            grad_clip: null
+        default:
+            top_level_name: []
+            grad_clip: 1
+
