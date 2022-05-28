@@ -20,7 +20,7 @@ data:
         axis: *axis_format
         HPI: *HPI
     pfft_format: *axis_format
-    num_workers: 4
+    num_workers: 0
 
 model:
     dtype: torch.cuda.FloatTensor
@@ -60,7 +60,7 @@ diffusion:
     num_diffusion_timesteps: 1000
 
 training:
-    batch_size: 3
+    batch_size: 14
     n_epochs: null
     n_iters: 5000000
     snapshot_freq: 5000
