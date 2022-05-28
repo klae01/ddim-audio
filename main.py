@@ -1,15 +1,17 @@
 import argparse
-import traceback
-import shutil
 import logging
-import yaml
-import sys
 import os
-import torch
+import shutil
+import sys
+import traceback
+
 import numpy as np
+import torch
 import torch.utils.tensorboard as tb
+import yaml
 
 from runners.diffusion import Diffusion
+from utils import dict2namespace
 
 torch.set_printoptions(sci_mode=False)
 
@@ -89,7 +91,7 @@ def parse_args_and_config():
         "--sequence",
         type=int,
         default=None,
-        help="while sample the sequence, number of intermediates in each case"
+        help="while sample the sequence, number of intermediates in each case",
     )
     args = parser.parse_args()
     args.log_path = os.path.join(args.exp, "logs", args.doc)
@@ -199,17 +201,6 @@ def parse_args_and_config():
     torch.backends.cudnn.benchmark = True
 
     return args, new_config
-
-
-def dict2namespace(config):
-    namespace = argparse.Namespace()
-    for key, value in config.items():
-        if isinstance(value, dict):
-            new_value = dict2namespace(value)
-        else:
-            new_value = value
-        setattr(namespace, key, new_value)
-    return namespace
 
 
 def main():
