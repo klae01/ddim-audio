@@ -10,7 +10,6 @@ import torch.utils.data as data
 import tqdm
 from datasets import get_dataset
 from functions import get_optimizer, get_scheduler
-from functions.ckpt_util import get_ckpt_path
 from functions.losses import loss_registry
 from models.diffusion import Model
 from models.ema import EMAHelper
