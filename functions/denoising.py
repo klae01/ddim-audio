@@ -24,7 +24,7 @@ def generalized_steps(x, seq, model, alpha, select_index, **kwargs):
             at_next = alpha[int(j)+1]
 
             et = model(xt, t.long())
-            xt.sub_(et * (1 - at) ** 0.5).div_(at**0.5)
+            xt.add_(et, alpha = -(1 - at) ** 0.5).div_(at**0.5)
 
             if (
                 select_index is None
