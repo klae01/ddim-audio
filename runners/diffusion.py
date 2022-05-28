@@ -381,9 +381,9 @@ class Diffusion(object):
         config = self.config
 
         x = torch.randn(
-            8,
+            config.sampling.num_samples,
             config.model.channels,
-            config.model.t_size,
+            config.sampling.t_size,
             config.model.f_size,
             device=self.device,
         )
@@ -401,7 +401,7 @@ class Diffusion(object):
             x_, x = self.sample_image(x, model, select_index=index)
 
         if self.config.sampling.denoise:
-            x = [denoise_2d(y) for y in x]
+            x = [denoise_2d(y.to(self.device)) for y in x]
         x = [y.permute(0, 3, 2, 1).to("cpu").numpy() for y in x]
         digits = np.ceil(np.log10(len(x) + 1)).astype(np.int32).tolist()
 
