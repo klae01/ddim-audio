@@ -1,16 +1,17 @@
 import argparse
-import traceback
-import shutil
 import logging
-import yaml
-import sys
 import os
-import torch
-import numpy as np
-import torch.utils.tensorboard as tb
+import shutil
+import sys
+import traceback
 
-from utils import dict2namespace
+import numpy as np
+import torch
+import torch.utils.tensorboard as tb
+import yaml
+
 from runners.diffusion import Diffusion
+from utils import dict2namespace
 
 torch.set_printoptions(sci_mode=False)
 
@@ -90,7 +91,7 @@ def parse_args_and_config():
         "--sequence",
         type=int,
         default=None,
-        help="while sample the sequence, number of intermediates in each case"
+        help="while sample the sequence, number of intermediates in each case",
     )
     args = parser.parse_args()
     args.log_path = os.path.join(args.exp, "logs", args.doc)

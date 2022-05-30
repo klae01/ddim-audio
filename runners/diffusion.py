@@ -1,27 +1,24 @@
+import glob
+import logging
 import os
 import sys
-
-sys.path.append("External")
-
-import logging
 import time
-import glob
 
 import numpy as np
-import tqdm
 import torch
 import torch.utils.data as data
+import tqdm
+from datasets import get_dataset
+from functions import get_optimizer, get_scheduler
+from functions.losses import loss_registry
+from models.diffusion import Model
+from models.ema import EMAHelper
 from PIL import Image
 from scipy.io.wavfile import write as WAV_write
 
-from UPU.signal.denoise import denoise_2d
+sys.path.append("External")
 from SST.utils.wav2img import limit_length_img, pfft2img, pfft2wav
-from models.diffusion import Model
-from models.ema import EMAHelper
-from functions import get_optimizer, get_scheduler
-from functions.losses import loss_registry
-from datasets import get_dataset
-from functions.ckpt_util import get_ckpt_path
+from UPU.signal.denoise import denoise_2d
 from utils import dict2namespace
 
 
@@ -143,9 +140,10 @@ class Diffusion(object):
         # antithetic sampling
         t = torch.randint(low=0, high=self.num_timesteps, size=((n + 1) // 2,))
         t = torch.cat([t, self.num_timesteps - t - 1], dim=0)[:n].to(self.device)
-        loss = loss_registry[self.config.model.type](model, x, t, e, a)
-
-        self.config.tb_logger.add_scalar("loss", loss.item(), global_step=step)
+        process_info = loss_registry[self.config.model.type](model, x, t, e, a)
+        loss = process_info["loss"]
+        for K, V in process_info.items():
+            self.config.tb_logger.add_scalar(K, V.item(), global_step=step)
 
         loggings = {
             "step": step,
