@@ -3,6 +3,7 @@ import sys
 
 import torch
 import torch.nn as nn
+import transformers.models.fnet.modeling_fnet as FNET
 
 sys.path.append("External")
 
@@ -14,30 +15,22 @@ class Residual_Block(nn.Module):
         super().__init__()
         self.channels = channels
 
-        self.norm = nn.Sequential(
-            *[
-                torch.nn.GroupNorm(
-                    num_groups=8, num_channels=channels, eps=1e-6, affine=True
-                )
-                for _ in range(3)
+        self.norm = nn.ModuleList(
+            [
+                nn.GroupNorm(num_groups=8, num_channels=channels, eps=1e-6, affine=True)
+                for _ in range(2)
             ]
         )
-        torch.nn.init.zeros_(self.norm[-1].weight)
-        self.norm[-1].register_parameter("bias", None)
 
-        self.conv = nn.Sequential(
-            *[
-                torch.nn.Conv2d(
-                    channels,
-                    channels,
-                    kernel_size=kernel_size,
-                    stride=1,
-                    padding=kernel_size // 2,
-                    bias=bias,
-                )
-                for bias in [False, True]
+        self.conv = nn.ParameterList(
+            [
+                nn.Parameter(torch.empty((channels, channels, 3, 3))),
+                nn.Parameter(torch.empty((channels, channels, 3, 3))),
             ]
         )
+        for I in self.conv:
+            nn.init.kaiming_normal_(I)
+        self.rezero = nn.Parameter(torch.zeros(1))
 
     def forward(self, input, temb):
         NORM = iter(self.norm)
@@ -45,13 +38,12 @@ class Residual_Block(nn.Module):
         x = input
 
         x = next(NORM)(x)
-        x = torch.nn.functional.silu(x)
-        x = next(CONV)(x) + temb[..., None, None]
-        x = torch.nn.functional.silu(x)
+        x = nn.functional.silu(x)
+        x = nn.functional.conv2d(x, next(CONV), stride=1, padding=1)
+        x = x + temb[..., None, None]
+        x = nn.functional.silu(x)
         x = next(NORM)(x)
-        x = next(CONV)(x)
-        x = torch.nn.functional.silu(x)
-        x = next(NORM)(x)
+        x = nn.functional.conv2d(x, next(CONV) * self.rezero, stride=1, padding=1)
 
         return input + x
 
@@ -59,7 +51,7 @@ class Residual_Block(nn.Module):
 class Upsample(nn.Module):
     def __init__(self, *, in_channels, out_channels):
         super().__init__()
-        self.conv = torch.nn.ConvTranspose2d(
+        self.conv = nn.ConvTranspose2d(
             in_channels, out_channels, kernel_size=4, stride=2, padding=1
         )
 
@@ -70,7 +62,7 @@ class Upsample(nn.Module):
 class Downsample(nn.Module):
     def __init__(self, *, in_channels, out_channels):
         super().__init__()
-        self.conv = torch.nn.Conv2d(
+        self.conv = nn.Conv2d(
             in_channels, out_channels, kernel_size=4, stride=2, padding=1
         )
 
@@ -102,9 +94,9 @@ class BetaEmbedding(nn.Module):
         self.register_buffer("te", te)
 
         self.weight = nn.Sequential(
-            torch.nn.Linear(pos_ch, emb_ch, bias=True),
-            torch.nn.Linear(emb_ch, emb_ch, bias=True),
-            torch.nn.Linear(emb_ch, channel_sz, bias=True),
+            nn.Linear(pos_ch, emb_ch, bias=True),
+            nn.Linear(emb_ch, emb_ch, bias=True),
+            nn.Linear(emb_ch, channel_sz, bias=True),
         )
 
     def forward(self, input):
@@ -112,9 +104,9 @@ class BetaEmbedding(nn.Module):
 
         x = self.te.index_select(0, input)
         x = next(WIGT)(x)
-        x = torch.nn.functional.silu(x)
+        x = nn.functional.silu(x)
         x = next(WIGT)(x)
-        x = torch.nn.functional.silu(x)
+        x = nn.functional.silu(x)
         x = next(WIGT)(x)
 
         return x
@@ -145,14 +137,41 @@ class TransformerEmbedding(nn.Module):
         return x
 
 
+class FNetLayer(nn.Module):
+    def __init__(self, config):
+        super().__init__()
+        self.FFT = FNET.FNetBasicFourierTransform(config)
+        self.dense_1 = nn.Linear(config.hidden_size, config.intermediate_size)
+        self.dense_2 = nn.Linear(config.intermediate_size, config.hidden_size)
+        self.dropout = nn.Dropout(config.hidden_dropout_prob)
+
+        self.rezero = nn.Parameter(torch.zeros(1))
+
+    def forward(self, hidden_states):
+        stream = x = hidden_states
+        x = self.FFT(x)[0]
+        stream = stream + x * self.rezero
+
+        x = stream
+        x = self.dense_1(x)
+        x = nn.functional.silu(x)
+        x = self.dropout(x)
+        x = self.dense_2(x)
+        stream = stream + x * self.rezero
+
+        return (stream,)
+
+
+FNET.FNetLayer = FNetLayer
+
+
 class Transformer_Module(nn.Module):
     def __init__(self, io_channels, config):
         # config contains only model.transformers
         super().__init__()
 
-        exec(config.imports)
         self.embedding = TransformerEmbedding(io_channels, config)
-        self.encoder = eval(config.module)(eval(config.config)(**vars(config.kwargs)))
+        self.encoder = FNET.FNetEncoder(FNET.FNetConfig(**vars(config.kwargs)))
         self.compute_out = nn.Linear(config.channels, io_channels)
 
     def forward(self, x):
@@ -188,7 +207,7 @@ class Model(nn.Module):
 
         self.down_modules = nn.ModuleList()
         self.down_modules.append(
-            torch.nn.Conv2d(
+            nn.Conv2d(
                 self.config.channels,
                 self.config.ch[0],
                 kernel_size=3,
@@ -198,7 +217,7 @@ class Model(nn.Module):
         )
         self.up_modules = nn.ModuleList()
         self.up_modules.append(
-            torch.nn.Conv2d(
+            nn.Conv2d(
                 self.config.ch[0],
                 self.config.channels,
                 kernel_size=3,
@@ -231,6 +250,9 @@ class Model(nn.Module):
             * (self.config.f_size // (2 ** (len(self.config.ch) - 1))),
             self.config.transformers,
         )
+        self.rezero = nn.ParameterList(
+            [nn.Parameter(torch.zeros(1)) for _ in self.down_modules]
+        )
         if self.config.dtype:
             self.type(self.config.dtype)
 
@@ -253,7 +275,7 @@ class Model(nn.Module):
         # downsampling
         hidden = []
         for lays in self.down_modules:
-            if type(lays) != torch.nn.modules.container.ModuleList:
+            if type(lays) != nn.modules.container.ModuleList:
                 lays = [lays]
 
             for lay in lays:
@@ -280,9 +302,11 @@ class Model(nn.Module):
 
         # upsampling
         hidden = iter(hidden[::-1])
+        rezero = iter(self.rezero)
         for lays in self.up_modules:
-            x = x + next(hidden)
-            if type(lays) != torch.nn.modules.container.ModuleList:
+            x = x + next(rezero) * next(hidden)
+            # x = next(rezero) * x + next(hidden)
+            if type(lays) != nn.modules.container.ModuleList:
                 lays = [lays]
 
             for lay in lays:

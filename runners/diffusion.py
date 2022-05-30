@@ -66,6 +66,7 @@ class parameter_option:
     def __init__(self):
         self.config = {}
         self.params = []
+        self.named_params = {}
 
 
 def classify_group(config, model):
@@ -83,6 +84,7 @@ def classify_group(config, model):
         top_level_name = name.split(".")[0]
         group_name = param_top_level.get(top_level_name, "default")
         param_group[group_name].params.append(param)
+        param_group[group_name].named_params[name] = param
 
     return {K: V for K, V in param_group.items() if V.params}
 
@@ -220,7 +222,24 @@ class Diffusion(object):
         schedulers = {}
         param_group = classify_group(self.config.optimization.optimizer, model)
         for name, p_opt in param_group.items():
-            optimizers[name] = optimizer = get_optimizer(p_opt.config, p_opt.params)
+            params = {
+                "rezero": {"params": [], "weight_decay": 0},
+                "default": {"params": []},
+            }
+
+            for name, param in p_opt.named_params.items():
+                append = False
+                for K, V in params.items():
+                    if K in name:
+                        V["params"].append(param)
+                        append = True
+                        break
+                if not append:
+                    params["default"]["params"].append(param)
+
+            optimizers[name] = optimizer = get_optimizer(
+                p_opt.config, list(params.values())
+            )
             scheduler = get_scheduler(p_opt.config, optimizer)
             if scheduler:
                 schedulers[name] = scheduler
