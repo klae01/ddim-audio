@@ -140,9 +140,10 @@ class Diffusion(object):
         # antithetic sampling
         t = torch.randint(low=0, high=self.num_timesteps, size=((n + 1) // 2,))
         t = torch.cat([t, self.num_timesteps - t - 1], dim=0)[:n].to(self.device)
-        loss = loss_registry[self.config.model.type](model, x, t, e, a)
-
-        self.config.tb_logger.add_scalar("loss", loss.item(), global_step=step)
+        process_info = loss_registry[self.config.model.type](model, x, t, e, a)
+        loss = process_info["loss"]
+        for K, V in process_info.items():
+            self.config.tb_logger.add_scalar(K, V.item(), global_step=step)
 
         loggings = {
             "step": step,
