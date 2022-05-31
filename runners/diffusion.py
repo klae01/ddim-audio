@@ -146,6 +146,13 @@ class Diffusion(object):
         loss = process_info["loss"]
         for K, V in process_info.items():
             self.config.tb_logger.add_scalar(K, V.item(), global_step=step)
+        for K, V in model.named_parameters():
+            if "rezero" in K:
+                try:
+                    for i, I in enumerate(V):
+                        self.config.tb_logger.add_scalar(f"{K}.{i}", I.item(), global_step=step)
+                except:
+                    self.config.tb_logger.add_scalar(f"{K}", V.item(), global_step=step)
 
         loggings = {
             "step": step,

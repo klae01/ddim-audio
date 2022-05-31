@@ -54,9 +54,10 @@ class Upsample(nn.Module):
         self.conv = nn.ConvTranspose2d(
             in_channels, out_channels, kernel_size=4, stride=2, padding=1
         )
+        self.norm = nn.GroupNorm(num_groups=8, num_channels=out_channels, eps=1e-6, affine=False)
 
     def forward(self, x):
-        return self.conv(x)
+        return self.norm(nn.functional.silu(self.conv(x)))
 
 
 class Downsample(nn.Module):
@@ -65,9 +66,10 @@ class Downsample(nn.Module):
         self.conv = nn.Conv2d(
             in_channels, out_channels, kernel_size=4, stride=2, padding=1
         )
+        self.norm = nn.GroupNorm(num_groups=8, num_channels=out_channels, eps=1e-6, affine=False)
 
     def forward(self, x):
-        return self.conv(x)
+        return self.norm(nn.functional.silu(self.conv(x)))
 
 
 @torch.no_grad()
@@ -150,13 +152,13 @@ class PoolingAttention(nn.Module):
 
         qry, key, val, seg, loc, out = self.attn(inp).chunk(6, 2)  # 6x Shape: [Batch, Sequence, AttentionFeatures]
         
-        aggregated = qry.mean(1, keepdim=True)  # Shape: [Batch, AttentionFeatures]
+        aggregated = qry.mean(1)  # Shape: [Batch, AttentionFeatures]
         aggregated = torch.einsum("ba,bsa->bs", aggregated, key)  # Shape: [Batch, Sequence]
         aggregated = nn.functional.softmax(aggregated, 1)
         aggregated = torch.einsum("bs,bsa,bza->bza", aggregated, val, out)  # Shape: [Batch, Sequence, AttentionFeatures]
 
         segment_max_pooled = seg.view(batch, sequence // self.segments, self.segments, -1)
-        segment_max_pooled = segment_max_pooled.max(2, keepdim=True)  # Shape: [Batch, PooledSequence, 1, AttentionFeatures]
+        segment_max_pooled = segment_max_pooled.amax(2, keepdim=True)  # Shape: [Batch, PooledSequence, 1, AttentionFeatures]
         segment_max_pooled = segment_max_pooled * out.view(batch, sequence // self.segments, self.segments, -1)  # Shape: [Batch, PooledSequence, PoolSize, AttentionFeatures]
         segment_max_pooled = segment_max_pooled.view(batch, sequence, -1)  # Shape: [Batch, Sequence, AttentionFeatures]
         
