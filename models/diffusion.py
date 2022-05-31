@@ -137,10 +137,39 @@ class TransformerEmbedding(nn.Module):
         return x
 
 
+class PoolingAttention(nn.Module):
+    def __init__(self, in_features: int, attention_features: int, segments: int, max_pool_kernel: int):
+        super(PoolingAttention, self).__init__()
+        self.attn = nn.Linear(in_features, attention_features * 6)
+        self.segments = segments
+        self.max_pool_kernel = max_pool_kernel
+
+    def forward(self, inp: torch.Tensor):  # Shape: [Batch, Sequence, Features]
+        batch, sequence, features = inp.size()
+        assert sequence % self.segments == 0
+
+        qry, key, val, seg, loc, out = self.attn(inp).chunk(6, 2)  # 6x Shape: [Batch, Sequence, AttentionFeatures]
+        
+        aggregated = qry.mean(1, keepdim=True)  # Shape: [Batch, AttentionFeatures]
+        aggregated = torch.einsum("ba,bsa->bs", aggregated, key)  # Shape: [Batch, Sequence]
+        aggregated = nn.functional.softmax(aggregated, 1)
+        aggregated = torch.einsum("bs,bsa,bza->bza", aggregated, val, out)  # Shape: [Batch, Sequence, AttentionFeatures]
+
+        segment_max_pooled = seg.view(batch, sequence // self.segments, self.segments, -1)
+        segment_max_pooled = segment_max_pooled.max(2, keepdim=True)  # Shape: [Batch, PooledSequence, 1, AttentionFeatures]
+        segment_max_pooled = segment_max_pooled * out.view(batch, sequence // self.segments, self.segments, -1)  # Shape: [Batch, PooledSequence, PoolSize, AttentionFeatures]
+        segment_max_pooled = segment_max_pooled.view(batch, sequence, -1)  # Shape: [Batch, Sequence, AttentionFeatures]
+        
+        loc = loc.transpose(1, 2)  # Shape: [Batch, AttentionFeatures, Sequence]
+        local_max_pooled = nn.functional.max_pool1d(loc, self.max_pool_kernel, 1, self.max_pool_kernel // 2)
+        local_max_pooled = local_max_pooled.transpose(1, 2)  # Shape: [Batch, Sequence, AttentionFeatures]
+        
+        return aggregated + segment_max_pooled + local_max_pooled
+
 class FNetLayer(nn.Module):
     def __init__(self, config):
         super().__init__()
-        self.FFT = FNET.FNetBasicFourierTransform(config)
+        self.Attention = PoolingAttention(config.hidden_size, config.hidden_size, 16, 3)
         self.dense_1 = nn.Linear(config.hidden_size, config.intermediate_size)
         self.dense_2 = nn.Linear(config.intermediate_size, config.hidden_size)
         self.dropout = nn.Dropout(config.hidden_dropout_prob)
@@ -149,7 +178,7 @@ class FNetLayer(nn.Module):
 
     def forward(self, hidden_states):
         stream = x = hidden_states
-        x = self.FFT(x)[0]
+        x = self.Attention(x)
         stream = stream + x * self.rezero
 
         x = stream
@@ -172,6 +201,7 @@ class Transformer_Module(nn.Module):
 
         self.embedding = TransformerEmbedding(io_channels, config)
         self.encoder = FNET.FNetEncoder(FNET.FNetConfig(**vars(config.kwargs)))
+        self.LayerNorm = nn.LayerNorm(config.channels, eps=config.kwargs.layer_norm_eps)
         self.compute_out = nn.Linear(config.channels, io_channels)
 
     def forward(self, x):
@@ -181,7 +211,8 @@ class Transformer_Module(nn.Module):
             output_hidden_states=False,
             return_dict=True,
         ).last_hidden_state
-
+        x = self.LayerNorm(x)
+        x = nn.functional.silu(x)
         x = self.compute_out(x)
         return x
 
@@ -304,8 +335,8 @@ class Model(nn.Module):
         hidden = iter(hidden[::-1])
         rezero = iter(self.rezero)
         for lays in self.up_modules:
-            x = x + next(rezero) * next(hidden)
-            # x = next(rezero) * x + next(hidden)
+            # x = x + next(rezero) * next(hidden)
+            x = next(rezero) * x + next(hidden)
             if type(lays) != nn.modules.container.ModuleList:
                 lays = [lays]
 
