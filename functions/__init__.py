@@ -52,9 +52,11 @@ def get_optimizer(config, parameters):
 
 def get_scheduler(config, optimizer):
     if config.warmup:
+        wu = config.warmup
+        mr = config.min_rate
         return LambdaLR(
             optimizer,
             lambda step: min(
-                ((1 + step) / config.warmup) ** -0.5, (1 + step) / config.warmup
+                mr + (1 - mr) * ((1 + step) / wu) ** -0.5, (1 + step) / wu
             ),
         )
