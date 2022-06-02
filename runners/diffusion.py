@@ -150,7 +150,9 @@ class Diffusion(object):
             if "rezero" in K:
                 try:
                     for i, I in enumerate(V):
-                        self.config.tb_logger.add_scalar(f"{K}.{i}", I.item(), global_step=step)
+                        self.config.tb_logger.add_scalar(
+                            f"{K}.{i}", I.item(), global_step=step
+                        )
                 except:
                     self.config.tb_logger.add_scalar(f"{K}", V.item(), global_step=step)
 

@@ -30,7 +30,7 @@ class Residual_Block(nn.Module):
         )
         for I in self.conv:
             nn.init.kaiming_normal_(I)
-        self.rezero = nn.Parameter(torch.zeros(1))
+        self.rezero = nn.Parameter(torch.tensor(0.0))
 
     def forward(self, input, temb):
         NORM = iter(self.norm)
@@ -54,7 +54,9 @@ class Upsample(nn.Module):
         self.conv = nn.ConvTranspose2d(
             in_channels, out_channels, kernel_size=4, stride=2, padding=1
         )
-        self.norm = nn.GroupNorm(num_groups=8, num_channels=out_channels, eps=1e-6, affine=False)
+        self.norm = nn.GroupNorm(
+            num_groups=8, num_channels=out_channels, eps=1e-6, affine=False
+        )
 
     def forward(self, x):
         return self.norm(nn.functional.silu(self.conv(x)))
@@ -66,7 +68,9 @@ class Downsample(nn.Module):
         self.conv = nn.Conv2d(
             in_channels, out_channels, kernel_size=4, stride=2, padding=1
         )
-        self.norm = nn.GroupNorm(num_groups=8, num_channels=out_channels, eps=1e-6, affine=False)
+        self.norm = nn.GroupNorm(
+            num_groups=8, num_channels=out_channels, eps=1e-6, affine=False
+        )
 
     def forward(self, x):
         return self.norm(nn.functional.silu(self.conv(x)))
@@ -140,7 +144,13 @@ class TransformerEmbedding(nn.Module):
 
 
 class PoolingAttention(nn.Module):
-    def __init__(self, in_features: int, attention_features: int, segments: int, max_pool_kernel: int):
+    def __init__(
+        self,
+        in_features: int,
+        attention_features: int,
+        segments: int,
+        max_pool_kernel: int,
+    ):
         super(PoolingAttention, self).__init__()
         self.attn = nn.Linear(in_features, attention_features * 6)
         self.segments = segments
@@ -150,23 +160,42 @@ class PoolingAttention(nn.Module):
         batch, sequence, features = inp.size()
         assert sequence % self.segments == 0
 
-        qry, key, val, seg, loc, out = self.attn(inp).chunk(6, 2)  # 6x Shape: [Batch, Sequence, AttentionFeatures]
-        
-        aggregated = qry.mean(1)  # Shape: [Batch, AttentionFeatures]
-        aggregated = torch.einsum("ba,bsa->bs", aggregated, key)  # Shape: [Batch, Sequence]
-        aggregated = nn.functional.softmax(aggregated, 1)
-        aggregated = torch.einsum("bs,bsa,bza->bza", aggregated, val, out)  # Shape: [Batch, Sequence, AttentionFeatures]
+        qry, key, val, seg, loc, out = self.attn(inp).chunk(
+            6, 2
+        )  # 6x Shape: [Batch, Sequence, AttentionFeatures]
 
-        segment_max_pooled = seg.view(batch, sequence // self.segments, self.segments, -1)
-        segment_max_pooled = segment_max_pooled.amax(2, keepdim=True)  # Shape: [Batch, PooledSequence, 1, AttentionFeatures]
-        segment_max_pooled = segment_max_pooled * out.view(batch, sequence // self.segments, self.segments, -1)  # Shape: [Batch, PooledSequence, PoolSize, AttentionFeatures]
-        segment_max_pooled = segment_max_pooled.view(batch, sequence, -1)  # Shape: [Batch, Sequence, AttentionFeatures]
-        
+        aggregated = qry.mean(1)  # Shape: [Batch, AttentionFeatures]
+        aggregated = torch.einsum(
+            "ba,bsa->bs", aggregated, key
+        )  # Shape: [Batch, Sequence]
+        aggregated = nn.functional.softmax(aggregated, 1)
+        aggregated = torch.einsum(
+            "bs,bsa,bza->bza", aggregated, val, out
+        )  # Shape: [Batch, Sequence, AttentionFeatures]
+
+        segment_max_pooled = seg.view(
+            batch, sequence // self.segments, self.segments, -1
+        )
+        segment_max_pooled = segment_max_pooled.amax(
+            2, keepdim=True
+        )  # Shape: [Batch, PooledSequence, 1, AttentionFeatures]
+        segment_max_pooled = segment_max_pooled * out.view(
+            batch, sequence // self.segments, self.segments, -1
+        )  # Shape: [Batch, PooledSequence, PoolSize, AttentionFeatures]
+        segment_max_pooled = segment_max_pooled.view(
+            batch, sequence, -1
+        )  # Shape: [Batch, Sequence, AttentionFeatures]
+
         loc = loc.transpose(1, 2)  # Shape: [Batch, AttentionFeatures, Sequence]
-        local_max_pooled = nn.functional.max_pool1d(loc, self.max_pool_kernel, 1, self.max_pool_kernel // 2)
-        local_max_pooled = local_max_pooled.transpose(1, 2)  # Shape: [Batch, Sequence, AttentionFeatures]
-        
+        local_max_pooled = nn.functional.max_pool1d(
+            loc, self.max_pool_kernel, 1, self.max_pool_kernel // 2
+        )
+        local_max_pooled = local_max_pooled.transpose(
+            1, 2
+        )  # Shape: [Batch, Sequence, AttentionFeatures]
+
         return aggregated + segment_max_pooled + local_max_pooled
+
 
 class FNetLayer(nn.Module):
     def __init__(self, config):
@@ -176,7 +205,7 @@ class FNetLayer(nn.Module):
         self.dense_2 = nn.Linear(config.intermediate_size, config.hidden_size)
         self.dropout = nn.Dropout(config.hidden_dropout_prob)
 
-        self.rezero = nn.Parameter(torch.zeros(1))
+        self.rezero = nn.Parameter(torch.tensor(0.0))
 
     def forward(self, hidden_states):
         stream = x = hidden_states
@@ -284,7 +313,10 @@ class Model(nn.Module):
             self.config.transformers,
         )
         self.rezero = nn.ParameterList(
-            [nn.Parameter(torch.zeros(1)) for _ in self.down_modules]
+            [
+                nn.Parameter(torch.tensor(1 / x))
+                for x in range(len(self.down_modules), 0, -1)
+            ]
         )
         if self.config.dtype:
             self.type(self.config.dtype)
@@ -337,8 +369,8 @@ class Model(nn.Module):
         hidden = iter(hidden[::-1])
         rezero = iter(self.rezero)
         for lays in self.up_modules:
-            # x = x + next(rezero) * next(hidden)
-            x = next(rezero) * x + next(hidden)
+            x = x + next(rezero) * next(hidden)
+            # x = nn.functional.sigmoid(next(rezero)) * x + next(hidden)
             if type(lays) != nn.modules.container.ModuleList:
                 lays = [lays]
 
