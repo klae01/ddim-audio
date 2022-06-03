@@ -1,146 +1,15 @@
 import math
 import sys
+from typing import Tuple
 
+import numpy as np
 import torch
 import torch.nn as nn
-import transformers.models.fnet.modeling_fnet as FNET
+import transformers.activations
 
 sys.path.append("External")
 
 from UPU.layers.normalize.groupnorm import GroupNorm1D
-
-
-class Residual_Block(nn.Module):
-    def __init__(self, *, channels, kernel_size=3):
-        super().__init__()
-        self.channels = channels
-
-        self.norm = nn.ModuleList(
-            [
-                nn.GroupNorm(num_groups=8, num_channels=channels, eps=1e-6, affine=True)
-                for _ in range(2)
-            ]
-        )
-
-        self.conv = nn.ParameterList(
-            [
-                nn.Parameter(torch.empty((channels, channels, 3, 3))),
-                nn.Parameter(torch.empty((channels, channels, 3, 3))),
-            ]
-        )
-        for I in self.conv:
-            nn.init.kaiming_normal_(I)
-        self.rezero = nn.Parameter(torch.tensor(0.0))
-
-    def forward(self, input, temb):
-        NORM = iter(self.norm)
-        CONV = iter(self.conv)
-        x = input
-
-        x = next(NORM)(x)
-        x = nn.functional.silu(x)
-        x = nn.functional.conv2d(x, next(CONV), stride=1, padding=1)
-        x = x + temb[..., None, None]
-        x = nn.functional.silu(x)
-        x = next(NORM)(x)
-        x = nn.functional.conv2d(x, next(CONV) * self.rezero, stride=1, padding=1)
-
-        return input + x
-
-
-class Upsample(nn.Module):
-    def __init__(self, *, in_channels, out_channels):
-        super().__init__()
-        self.conv = nn.ConvTranspose2d(
-            in_channels, out_channels, kernel_size=4, stride=2, padding=1
-        )
-        self.norm = nn.GroupNorm(
-            num_groups=8, num_channels=out_channels, eps=1e-6, affine=False
-        )
-
-    def forward(self, x):
-        return self.norm(nn.functional.silu(self.conv(x)))
-
-
-class Downsample(nn.Module):
-    def __init__(self, *, in_channels, out_channels):
-        super().__init__()
-        self.conv = nn.Conv2d(
-            in_channels, out_channels, kernel_size=4, stride=2, padding=1
-        )
-        self.norm = nn.GroupNorm(
-            num_groups=8, num_channels=out_channels, eps=1e-6, affine=False
-        )
-
-    def forward(self, x):
-        return self.norm(nn.functional.silu(self.conv(x)))
-
-
-@torch.no_grad()
-def Add_Encoding(data):
-    length = data.shape[-2]
-    channel = data.shape[-1]
-    position = torch.arange(length, dtype=data.dtype, device=data.device).unsqueeze(1)
-    div_term = torch.exp(
-        torch.arange(0, channel, 2, dtype=data.dtype, device=data.device)
-        * (-math.log(10000.0) / channel)
-    )
-    x = position * div_term
-    data[..., 0::2] += torch.sin(x)
-    data[..., 1::2] += torch.cos(x)
-
-
-class BetaEmbedding(nn.Module):
-    def __init__(self, seq_length, channel_sz):
-        super().__init__()
-        pos_ch = 128
-        emb_ch = 512
-        te = torch.zeros(seq_length, pos_ch)
-        Add_Encoding(te)
-        self.register_buffer("te", te)
-
-        self.weight = nn.Sequential(
-            nn.Linear(pos_ch, emb_ch, bias=True),
-            nn.Linear(emb_ch, emb_ch, bias=True),
-            nn.Linear(emb_ch, channel_sz, bias=True),
-        )
-
-    def forward(self, input):
-        WIGT = iter(self.weight)
-
-        x = self.te.index_select(0, input)
-        x = next(WIGT)(x)
-        x = nn.functional.silu(x)
-        x = next(WIGT)(x)
-        x = nn.functional.silu(x)
-        x = next(WIGT)(x)
-
-        return x
-
-
-class TransformerEmbedding(nn.Module):
-    def __init__(self, in_channels, config):
-        super().__init__()
-        self.te = None
-        self.LayerNorm = nn.LayerNorm(in_channels, eps=config.kwargs.layer_norm_eps)
-        self.projection = nn.Linear(in_channels, config.channels)
-        self.dropout = nn.Dropout(config.kwargs.hidden_dropout_prob)
-
-    def forward(self, input):
-        if self.te == None or self.te.size(0) > input.size(1):
-            size = input.size(1)
-            size = 2 ** math.ceil(math.log2(size))
-            self.te = torch.zeros(
-                size, input.size(2), dtype=input.dtype, device=input.device
-            )
-            Add_Encoding(self.te)
-
-        x = input + self.te[: input.size(1)]
-
-        x = self.LayerNorm(x)
-        x = self.projection(x)
-        x = self.dropout(x)
-        return x
 
 
 class PoolingAttention(nn.Module):
@@ -152,7 +21,7 @@ class PoolingAttention(nn.Module):
         max_pool_kernel: int,
     ):
         super(PoolingAttention, self).__init__()
-        self.attn = nn.Linear(in_features, attention_features * 6)
+        self.attn = nn.Linear(in_features, attention_features * 6, bias=False)
         self.segments = segments
         self.max_pool_kernel = max_pool_kernel
 
@@ -197,55 +66,210 @@ class PoolingAttention(nn.Module):
         return aggregated + segment_max_pooled + local_max_pooled
 
 
-class FNetLayer(nn.Module):
+class T_Layer(nn.Module):
+    # https://github.com/huggingface/transformers/blob/1c220ced8ecc5f12bc979239aa648747411f9fc4/src/transformers/activations.py#L37
     def __init__(self, config):
         super().__init__()
-        self.Attention = PoolingAttention(config.hidden_size, config.hidden_size, 16, 3)
-        self.dense_1 = nn.Linear(config.hidden_size, config.intermediate_size)
-        self.dense_2 = nn.Linear(config.intermediate_size, config.hidden_size)
-        self.dropout = nn.Dropout(config.hidden_dropout_prob)
+        self.LayerNorm = nn.ModuleList(
+            [
+                nn.LayerNorm(config.hidden_size, eps=config.layer_norm_eps)
+                for _ in range(2)
+            ]
+        )
+        self.Attention = PoolingAttention(
+            config.hidden_size,
+            config.hidden_size,
+            config.segment_size,
+            config.local_kernel_size,
+        )
+        self.output = nn.Linear(config.hidden_size, config.hidden_size)
+
+        self.dense_0 = nn.Linear(
+            config.hidden_size, config.intermediate_size, bias=False
+        )
+        self.dense_1 = nn.Linear(
+            config.hidden_size, config.intermediate_size, bias=False
+        )
+        self.dense_2 = nn.Linear(
+            config.intermediate_size, config.hidden_size, bias=False
+        )
+        self.activation = transformers.activations.gelu_new()
+        self.dropout = nn.ModuleList(
+            [nn.Dropout(config.hidden_dropout_prob) for _ in range(3)]
+        )
 
         self.rezero = nn.Parameter(torch.tensor(0.0))
 
     def forward(self, hidden_states):
-        stream = x = hidden_states
-        x = self.Attention(x)
-        stream = stream + x * self.rezero
+        dropout = iter(self.dropout)
+        LayerNorm = iter(self.LayerNorm)
 
-        x = stream
-        x = self.dense_1(x)
-        x = nn.functional.silu(x)
-        x = self.dropout(x)
+        stream = x = hidden_states
+        x = next(LayerNorm)(x)
+        x = self.Attention(x)
+        x = self.output(x)
+        x = next(dropout)(x)
+        stream = x = stream + x * self.rezero
+
+        x = next(LayerNorm)(x)
+        x = self.activation(self.dense_0(x)) * self.dense_1(x)
+        x = next(dropout)(x)
         x = self.dense_2(x)
-        stream = stream + x * self.rezero
+        x = next(dropout)(x)
+        stream = x = stream + x * self.rezero
 
         return (stream,)
 
 
-FNET.FNetLayer = FNetLayer
+class T_Encoder(nn.Module):
+    def __init__(self, config):
+        # take only model config
+        super().__init__()
+        self.config = config
+        self.layer = nn.ModuleList(
+            [T_Layer(config) for _ in range(config.num_hidden_layers)]
+        )
+        self.LayerNorm = nn.LayerNorm(config.hidden_size, eps=config.layer_norm_eps)
+        self.dropout = nn.Dropout(config.hidden_dropout_prob)
+
+    def forward(self, hidden_states):
+        for i, layer_module in enumerate(self.layer):
+            hidden_states, _ = layer_module(hidden_states)
+        hidden_states = self.LayerNorm(hidden_states)
+        hidden_states = self.dropout(hidden_states)
+        return hidden_states
 
 
-class Transformer_Module(nn.Module):
-    def __init__(self, io_channels, config):
+@torch.no_grad()
+def Add_Encoding(data):
+    length = data.shape[-2]
+    channel = data.shape[-1]
+    position = torch.arange(length, dtype=data.dtype, device=data.device).unsqueeze(1)
+    div_term = torch.exp(
+        torch.arange(0, channel, 2, dtype=data.dtype, device=data.device)
+        * (-math.log(10000.0) / channel)
+    )
+    x = position * div_term
+    data[..., 0::2] += torch.sin(x)
+    data[..., 1::2] += torch.cos(x)
+
+
+class T_Embedding(nn.Module):
+    def __init__(self, config):
+        # take only model config
+        super().__init__()
+        self.te = None
+        in_channels = config.hidden_size
+        self.LayerNorm = nn.LayerNorm(in_channels, eps=config.layer_norm_eps)
+        self.projection = nn.Linear(in_channels, config.hidden_size)
+        self.dropout = nn.Dropout(config.hidden_dropout_prob)
+
+    def forward(self, input):
+        if self.te == None or self.te.size(0) > input.size(1):
+            size = input.size(1)
+            size = 2 ** math.ceil(math.log2(size))
+            self.te = torch.zeros(
+                size, input.size(2), dtype=input.dtype, device=input.device
+            )
+            Add_Encoding(self.te)
+
+        x = input + self.te[: input.size(1)]
+
+        x = self.LayerNorm(x)
+        x = self.projection(x)
+        x = self.dropout(x)
+        return x
+
+
+class T_Module(nn.Module):
+    def __init__(self, config):
         # config contains only model.transformers
         super().__init__()
+        self.embedding = T_Embedding(config)
+        self.encoder = T_Encoder(config)
 
-        self.embedding = TransformerEmbedding(io_channels, config)
-        self.encoder = FNET.FNetEncoder(FNET.FNetConfig(**vars(config.kwargs)))
-        self.LayerNorm = nn.LayerNorm(config.channels, eps=config.kwargs.layer_norm_eps)
-        self.compute_out = nn.Linear(config.channels, io_channels)
+    def _init_weights(self, module):
+        if isinstance(module, nn.LayerNorm):
+            module.weight.data.fill_(1.0)
+        elif isinstance(module, nn.Linear):
+            module.weight.data.normal_(mean=0.0, std=module.in_features**-0.5)
+            if hasattr(module, "bias"):
+                module.bias.data.zero_()
 
     def forward(self, x):
         x = self.embedding(x)
-        x = self.encoder(
-            x,
-            output_hidden_states=False,
-            return_dict=True,
-        ).last_hidden_state
-        x = self.LayerNorm(x)
-        x = nn.functional.silu(x)
-        x = self.compute_out(x)
+        x = self.encoder(x)
         return x
+
+
+def get_embedding(a_sqrt, gamma, scale):
+    X = (
+        a_sqrt[..., None]
+        * 10
+        ** (
+            -torch.linspace(0, 63, 64, dtype=a_sqrt.dtype, device=a_sqrt.device) / gamma
+        )
+        * scale
+    )
+    return torch.cat([torch.sin(X), torch.cos(X)], dim=-1)
+
+
+class Alpha_weight_Embedding(nn.Module):
+    def __init__(self, out_shape, divide, **embedding_config):
+        self.out_shape = out_shape
+        self.divide = divide
+        self.embedding_config = embedding_config
+        pos_ch = 128
+        emb_ch = 512
+        out_features = np.prod(out_shape)
+        self.weight = nn.ModuleList(
+            [
+                nn.Linear(pos_ch, emb_ch, bias=True),
+                nn.Linear(emb_ch, emb_ch, bias=True),
+                nn.Linear(emb_ch // divide, out_features // divide, bias=True),
+            ]
+        )
+        self.weight[-1].bias.zero_()
+        self.normal = nn.ModuleList(
+            [
+                nn.LayerNorm(emb_ch),
+                nn.LayerNorm(emb_ch),
+                nn.LayerNorm(out_features),
+            ]
+        )
+        self.normal[-1].weight.zero_()
+        torch.nn.init.orthogonal_(self.normal[-1].bias.view(out_shape))
+
+    def forward(self, input):
+        WIGT = iter(self.weight)
+        NORM = iter(self.normal)
+        x = get_embedding(input, self.embedding_config)
+
+        x = next(WIGT)(x)
+        x = nn.functional.silu(x)
+        x = next(NORM)(x)
+        x = next(WIGT)(x)
+        x = nn.functional.silu(x)
+        x = next(NORM)(x)
+
+        W = next(WIGT)
+        x = torch.cat([W(I) for I in x.chunk(self.divide, -1)], axis=-1)
+        x = next(NORM)(x)
+        x = x.reshape(self.out_shape)
+
+        return x
+
+
+class G_mapping(nn.Module):
+    def __init__(self, in_features, out_features):
+        self.weight = nn.Linear(in_features, out_features * 2, bias=True)
+        self.weight.bias.zero_()
+
+    def forward(self, input):
+        x = input
+        x = self.weight(x)
+        μ, σ = x.chunk(2, -1)
+        return μ, torch.sigmoid(σ)
 
 
 class Model(nn.Module):
@@ -253,131 +277,32 @@ class Model(nn.Module):
         # get full config
 
         self.config = config.model
-        assert len(self.config.ch) == len(self.config.krn) == len(self.config.res)
         super().__init__()
+        hidden_size = config.transformers.kwargs.hidden_size
+        io_size = config.channels * config.f_size
+        self.AW_EMB = Alpha_weight_Embedding(
+            (hidden_size, io_size),
+            config.devide,
+            {"gamma": config.gamma, "scale": config.scale},
+        )
+        self.transformer = T_Module(self.config.transformers.kwargs)
+        self.Gaussian_mapping = G_mapping(hidden_size, io_size)
 
-        embedding_size = [
-            temb_ch
-            for res_cnt, temb_ch in zip(self.config.res, self.config.ch)
-            for _ in range(res_cnt)
-        ]
-        embedding_size = embedding_size + embedding_size[::-1]
-        self.embedding_size = embedding_size
-        self.temb = BetaEmbedding(
-            config.diffusion.num_diffusion_timesteps, sum(embedding_size)
-        )
-
-        self.down_modules = nn.ModuleList()
-        self.down_modules.append(
-            nn.Conv2d(
-                self.config.channels,
-                self.config.ch[0],
-                kernel_size=3,
-                stride=1,
-                padding=1,
-            )
-        )
-        self.up_modules = nn.ModuleList()
-        self.up_modules.append(
-            nn.Conv2d(
-                self.config.ch[0],
-                self.config.channels,
-                kernel_size=3,
-                stride=1,
-                padding=1,
-            )
-        )
-        for prev_ch, ch, krn, res in zip(
-            [-1] + self.config.ch[:-1], self.config.ch, self.config.krn, self.config.res
-        ):
-            m_list = (
-                []
-                if prev_ch == -1
-                else [Downsample(in_channels=prev_ch, out_channels=ch)]
-            )
-            m_list += [Residual_Block(channels=ch, kernel_size=krn) for _ in range(res)]
-            self.down_modules.append(nn.ModuleList(m_list))
-
-            m_list = (
-                []
-                if prev_ch == -1
-                else [Upsample(in_channels=ch, out_channels=prev_ch)]
-            )
-            m_list += [Residual_Block(channels=ch, kernel_size=krn) for _ in range(res)]
-            self.up_modules.append(nn.ModuleList(m_list[::-1]))
-        self.up_modules = self.up_modules[::-1]
-
-        self.transformer = Transformer_Module(
-            self.config.ch[-1]
-            * (self.config.f_size // (2 ** (len(self.config.ch) - 1))),
-            self.config.transformers,
-        )
-        self.rezero = nn.ParameterList(
-            [
-                nn.Parameter(torch.tensor(1 / x))
-                for x in range(len(self.down_modules), 0, -1)
-            ]
-        )
         if self.config.dtype:
-            self.type(self.config.dtype)
-
-    def forward(self, input, t):
-        # input: [B, C, T, F]
-        # transformer i/o: [B, T, F*C]
-        # conv input: [B, C, T, F]
-
-        if (
-            self.config.transformers.dtype
-            and self.config.transformers.dtype != self.config.dtype
-        ):
+            self.AW_EMB.type(self.config.dtype)
+            self.Gaussian_mapping.type(self.config.dtype)
+        if self.config.transformers.dtype:
             self.transformer.type(self.config.transformers.dtype)
 
-        temb = self.temb(t)
-        temb = torch.split(temb, self.embedding_size, dim=-1)
-        temb = iter(temb)
+    def forward(self, input, t) -> Tuple[torch.Tensor, torch.Tensor]:
+        # input: [B, T, F, C]
 
-        x = input
-        # downsampling
-        hidden = []
-        for lays in self.down_modules:
-            if type(lays) != nn.modules.container.ModuleList:
-                lays = [lays]
+        x = input.view(*input.shape[:2], -1)
+        t = t.type(self.type())
 
-            for lay in lays:
-                if type(lay) == Residual_Block:
-                    x = lay(x, next(temb))
-                else:
-                    x = lay(x)
-            hidden.append(x)
-
-        # transformer
-        type_reserve = x.type()
-        if (
-            self.config.transformers.dtype
-            and self.config.transformers.dtype != self.config.dtype
-        ):
-            x = x.type(self.config.transformers.dtype)
-        x = torch.permute(x, (0, 2, 1, 3))
-        shape_reserve = x.shape
-        x = x.reshape(*x.shape[:2], -1)
+        weight = self.AW_EMB(t)
+        x = nn.functional.linear(x, weight)
         x = self.transformer(x)
-        x = x.reshape(*shape_reserve)
-        x = torch.permute(x, (0, 2, 1, 3))
-        x = x.type(type_reserve)
+        x = self.Gaussian_mapping(x)
 
-        # upsampling
-        hidden = iter(hidden[::-1])
-        rezero = iter(self.rezero)
-        for lays in self.up_modules:
-            x = x + next(rezero) * next(hidden)
-            # x = nn.functional.sigmoid(next(rezero)) * x + next(hidden)
-            if type(lays) != nn.modules.container.ModuleList:
-                lays = [lays]
-
-            for lay in lays:
-                if type(lay) == Residual_Block:
-                    x = lay(x, next(temb))
-                else:
-                    x = lay(x)
-
-        return x
+        return [I.view(*input.shape) for I in x]
