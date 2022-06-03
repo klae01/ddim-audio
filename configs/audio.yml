@@ -18,10 +18,11 @@ data:
         device: cuda
         axis: *axis_format
         HPI: *HPI
+    
     num_workers: 0
-
+    
+    axis: *axis_format
     log_polar_transform: True
-    normalize_dim: [0, 1] # or null
 
 model:
     dtype: torch.cuda.BFloat16Tensor
@@ -47,7 +48,7 @@ model:
 
 diffusion:
     training_beta: "np.linspace(1e-6, 6e-3, 1000)"
-    sampling_beta: "np.asarray([j*10**i for i in range(-6, 0) for j in [1, 2, 4, 6, 8]])"
+    sampling_beta: "np.asarray([j*10**i for i in range(-6, 0) for j in [1, 2, 3, 5, 7]])"
 
 training:
     batch_size: 128

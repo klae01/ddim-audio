@@ -10,14 +10,33 @@ from SST.utils import AudioDataset
 
 
 def get_dataset(args, config):
+    # take only data related config
+    def get_log_data_spec(data):
+        eps = np.exp(-16).tolist()
+        C_axis = config.axis.index("C")
+        if config.data.dataset_kwargs.use_numpy:
+            X = np.linalg.norm(data, ord=2, axis=C_axis)
+        else:
+            X = data.norm(data, p=2, dim=C_axis)
+
+        X = (X + eps).log()
+        get_log_data_spec.log_data_spec = {
+            "eps": eps,
+            "mean": np.asarray(X.mean()).tolist(),
+            "std": np.asarray(X.std()).tolist(),
+        }
+        return data
+
+    get_log_data_spec.log_data_spec = None
+
     dataset, test_dataset = None, None
-    if config.data.dataset == "AUDIO":
-        if type(config.data.path) is not str:
-            raise Exception(f"Need to provide path of data. get {config.data.path}")
-        if not os.path.isdir(config.data.path):
-            raise NotADirectoryError(f"{config.data.path} is not a directory")
-        if not os.listdir(config.data.path):
-            raise FileNotFoundError(f"{config.data.path} do not contains files")
+    if config.dataset == "AUDIO":
+        if type(config.path) is not str:
+            raise Exception(f"Need to provide path of data. get {config.path}")
+        if not os.path.isdir(config.path):
+            raise NotADirectoryError(f"{config.path} is not a directory")
+        if not os.listdir(config.path):
+            raise FileNotFoundError(f"{config.path} do not contains files")
 
         class Dummy_Wrapping_Dataset(AudioDataset):
             def __getitem__(self, *args, **kwargs):
@@ -25,8 +44,9 @@ def get_dataset(args, config):
                 return x, 0
 
         dataset = Dummy_Wrapping_Dataset(
-            path=config.data.path,
-            **vars(config.data.dataset_kwargs),
+            path=config.path,
+            **vars(config.dataset_kwargs),
+            transform=get_log_data_spec,
         )
 
     else:
@@ -46,4 +66,4 @@ def get_dataset(args, config):
         test_dataset = Subset(dataset, test_indices)
         dataset = Subset(dataset, train_indices)
 
-    return dataset, test_dataset
+    return dataset, test_dataset, get_log_data_spec.log_data_spec
