@@ -57,11 +57,13 @@ class Diffusion(object):
         n = x.size(0)
         e = torch.randn_like(x)
 
-        t = torch.randint(low=1, high=self.num_timesteps, size=n)
+        dtype = self.alphas.dtype
+        device = self.alphas.device
+        t = torch.randint(low=1, high=self.num_timesteps, size=(n,), device=device)
         a = self.alphas_cumprod_sqrt[t], self.alphas_cumprod_sqrt[t - 1]
-        a = torch.rand(n) * (a[0] - a[1]) + a[1]
+        a = torch.rand(n, dtype=dtype, device=device) * (a[0] - a[1]) + a[1]
 
-        process_info = model_loss_evaluation(self.model, x, e, a, self.log_data_spec)
+        process_info = model_loss_evaluation(model, x, e, a, self.log_data_spec)
 
         loss = process_info["loss"]
         for K, V in process_info.items():
@@ -117,7 +119,7 @@ class Diffusion(object):
                 optimizer.state_dict(),
                 epoch,
                 step,
-                self.log_polar_config,
+                self.log_data_spec,
             ]
 
             torch.save(
@@ -134,7 +136,7 @@ class Diffusion(object):
         self.betas = eval(self.config.diffusion.training_beta)
         self.alphas = 1 - self.betas
         self.alphas_cumprod = self.alphas.cumprod()
-        self.alphas_cumprod_sqrt = self.alphas_cumprod.sqrt()
+        self.alphas_cumprod_sqrt = np.sqrt(self.alphas_cumprod)
         self.num_timesteps = len(self.betas)
 
         # config dataset
@@ -149,6 +151,11 @@ class Diffusion(object):
 
         # config model
         model = Model(self.config)
+
+        self.betas = torch.from_numpy(self.betas).type(self.config.model.dtype)
+        self.alphas = torch.from_numpy(self.alphas).type(self.config.model.dtype)
+        self.alphas_cumprod = torch.from_numpy(self.alphas_cumprod).type(self.config.model.dtype)
+        self.alphas_cumprod_sqrt = torch.from_numpy(self.alphas_cumprod_sqrt).type(self.config.model.dtype)
 
         # config optimizer & scheduler
         optimizers = {}
@@ -186,7 +193,7 @@ class Diffusion(object):
         if self.args.resume_training:
             states = dict(
                 zip(
-                    ["model", "optimizer", "epoch", "step", "log_polar_config"],
+                    ["model", "optimizer", "epoch", "step", "log_data_spec"],
                     torch.load(os.path.join(self.args.log_path, "ckpt.pth")),
                 )
             )
@@ -194,7 +201,7 @@ class Diffusion(object):
             optimizer.load_state_dict(states["optimizer"])
             start_epoch = states["epoch"]
             step = states["step"]
-            self.log_polar_config = states["log_polar_config"]
+            self.log_data_spec = states["log_data_spec"]
             del states
 
         # training
@@ -250,7 +257,7 @@ class Diffusion(object):
                     map_location=self.config.device,
                 )
             model.load_state_dict(states[0], strict=True)
-            self.log_polar_config = states[4]
+            self.log_data_spec = states[4]
             del states
         else:
             raise NotImplementedError("unknown option for pretrained model")

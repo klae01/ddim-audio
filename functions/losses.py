@@ -9,6 +9,7 @@ def model_loss_evaluation(
     a_sqrt: torch.Tensor,
     config,
 ):
+    a_sqrt = a_sqrt.view(-1, 1, 1, 1)
     a = a_sqrt.square()
     x0_lp = utils.log_polar_convert(x0, config)
     e = utils.log_polar_noise_processing(e, config)
@@ -17,17 +18,15 @@ def model_loss_evaluation(
     y, sig_y = model(x, a_sqrt)
 
     # scalar loss (NLL)
-    a = e[..., 0]
-    b = y[..., 0]
-    sig = sig_y[..., 0]
+    diff = e[..., 0] - y[..., 0]
+    sig = sig_y[..., 0] + 1e-3
     var = sig.square()
-    loss = torch.log1p(-torch.exp(-var / 2) * torch.cos(a - b)).mean()
+    loss = torch.log1p(-torch.exp(-var / 2) * torch.cos(diff)).mean()
 
     # angular loss (NLL direct)
-    a = e[..., 1]
-    b = y[..., 1]
+    diff = e[..., 1] - y[..., 1]
     sig = sig_y[..., 1] + 1e-3
-    loss += torch.log(sig).mean() + ((a - b) / sig).square().mean() / 2
+    loss += torch.log(sig).mean() + (diff / sig).square().mean() / 2
 
     with torch.no_grad():
         x_hat = utils.log_polar_invert(x0_lp + (1 / a - 1).sqrt() * (e - y), config)

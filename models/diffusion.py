@@ -93,7 +93,7 @@ class T_Layer(nn.Module):
         self.dense_2 = nn.Linear(
             config.intermediate_size, config.hidden_size, bias=False
         )
-        self.activation = transformers.activations.gelu_new()
+        self.activation = transformers.activations.gelu_new
         self.dropout = nn.ModuleList(
             [nn.Dropout(config.hidden_dropout_prob) for _ in range(3)]
         )
@@ -118,7 +118,7 @@ class T_Layer(nn.Module):
         x = next(dropout)(x)
         stream = x = stream + x * self.rezero
 
-        return (stream,)
+        return stream
 
 
 class T_Encoder(nn.Module):
@@ -134,7 +134,7 @@ class T_Encoder(nn.Module):
 
     def forward(self, hidden_states):
         for i, layer_module in enumerate(self.layer):
-            hidden_states, _ = layer_module(hidden_states)
+            hidden_states = layer_module(hidden_states)
         hidden_states = self.LayerNorm(hidden_states)
         hidden_states = self.dropout(hidden_states)
         return hidden_states
@@ -215,7 +215,8 @@ def get_embedding(a_sqrt, gamma, scale):
 
 
 class Alpha_weight_Embedding(nn.Module):
-    def __init__(self, out_shape, divide, **embedding_config):
+    def __init__(self, out_shape, divide, embedding_config):
+        super().__init__()
         self.out_shape = out_shape
         self.divide = divide
         self.embedding_config = embedding_config
@@ -226,10 +227,9 @@ class Alpha_weight_Embedding(nn.Module):
             [
                 nn.Linear(pos_ch, emb_ch, bias=True),
                 nn.Linear(emb_ch, emb_ch, bias=True),
-                nn.Linear(emb_ch // divide, out_features // divide, bias=True),
+                nn.Linear(emb_ch // divide, out_features // divide, bias=False),
             ]
         )
-        self.weight[-1].bias.zero_()
         self.normal = nn.ModuleList(
             [
                 nn.LayerNorm(emb_ch),
@@ -237,13 +237,13 @@ class Alpha_weight_Embedding(nn.Module):
                 nn.LayerNorm(out_features),
             ]
         )
-        self.normal[-1].weight.zero_()
+        self.normal[-1].weight.data.zero_()
         torch.nn.init.orthogonal_(self.normal[-1].bias.view(out_shape))
 
     def forward(self, input):
         WIGT = iter(self.weight)
         NORM = iter(self.normal)
-        x = get_embedding(input, self.embedding_config)
+        x = get_embedding(input, **self.embedding_config)
 
         x = next(WIGT)(x)
         x = nn.functional.silu(x)
@@ -255,15 +255,16 @@ class Alpha_weight_Embedding(nn.Module):
         W = next(WIGT)
         x = torch.cat([W(I) for I in x.chunk(self.divide, -1)], axis=-1)
         x = next(NORM)(x)
-        x = x.reshape(self.out_shape)
+        x = x.view(input.size(0), *self.out_shape)
 
         return x
 
 
 class G_mapping(nn.Module):
     def __init__(self, in_features, out_features):
+        super().__init__()
         self.weight = nn.Linear(in_features, out_features * 2, bias=True)
-        self.weight.bias.zero_()
+        self.weight.bias.data.zero_()
 
     def forward(self, input):
         x = input
@@ -278,12 +279,12 @@ class Model(nn.Module):
 
         self.config = config.model
         super().__init__()
-        hidden_size = config.transformers.kwargs.hidden_size
-        io_size = config.channels * config.f_size
+        hidden_size = self.config.transformers.kwargs.hidden_size
+        io_size = self.config.channels * self.config.f_size
         self.AW_EMB = Alpha_weight_Embedding(
             (hidden_size, io_size),
-            config.devide,
-            {"gamma": config.gamma, "scale": config.scale},
+            self.config.divide,
+            {"gamma": self.config.gamma, "scale": self.config.scale},
         )
         self.transformer = T_Module(self.config.transformers.kwargs)
         self.Gaussian_mapping = G_mapping(hidden_size, io_size)
@@ -294,15 +295,29 @@ class Model(nn.Module):
         if self.config.transformers.dtype:
             self.transformer.type(self.config.transformers.dtype)
 
-    def forward(self, input, t) -> Tuple[torch.Tensor, torch.Tensor]:
+    def forward(self, input, a) -> Tuple[torch.Tensor, torch.Tensor]:
         # input: [B, T, F, C]
 
         x = input.view(*input.shape[:2], -1)
-        t = t.type(self.type())
 
-        weight = self.AW_EMB(t)
-        x = nn.functional.linear(x, weight)
+        weight = self.AW_EMB(a)
+        x = torch.einsum("BTF,BOF->BTO", x, weight)
+
+
+        if (
+            self.config.transformers.dtype
+            and self.config.transformers.dtype != self.config.dtype
+        ):
+            x = x.type(self.config.transformers.dtype)
+
         x = self.transformer(x)
+
+        if (
+            self.config.transformers.dtype
+            and self.config.transformers.dtype != self.config.dtype
+        ):
+            x = x.type(self.config.dtype)
+        
         x = self.Gaussian_mapping(x)
 
         return [I.view(*input.shape) for I in x]

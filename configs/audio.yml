@@ -12,9 +12,9 @@ data:
     dataset_kwargs:
         f_size: *f_size
         t_size: *t_size
-        virtual_samplerate: *virtual_samplerate
+        samplerate: *virtual_samplerate
         use_numpy: False
-        dtype: torch.bfloat16
+        serve_dtype: torch.bfloat16
         device: cuda
         axis: *axis_format
         HPI: *HPI
@@ -54,7 +54,7 @@ diffusion:
     sampling_beta: "np.asarray([j*10**i for i in range(-6, 0) for j in [1, 2, 3, 5, 7]])"
 
 training:
-    batch_size: 128
+    batch_size: 48
     n_epochs: null
     n_iters: 5000000
     snapshot_freq: 5000

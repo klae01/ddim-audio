@@ -6,7 +6,7 @@ from torch.utils.data import Subset
 
 sys.path.append("External")
 
-from SST.utils import AudioDataset
+from SST.utils import AudioDataset, config as SST_config
 
 
 def get_dataset(args, config):
@@ -14,17 +14,22 @@ def get_dataset(args, config):
     def get_log_data_spec(data):
         eps = np.exp(-16).tolist()
         C_axis = config.axis.index("C")
-        if config.data.dataset_kwargs.use_numpy:
+        if config.dataset_kwargs.use_numpy:
             X = np.linalg.norm(data, ord=2, axis=C_axis)
+            X = (X + eps).log()
+            get_log_data_spec.log_data_spec = {
+                "eps": eps,
+                "mean": X.mean().tolist(),
+                "std": X.std().tolist(),
+            }
         else:
-            X = data.norm(data, p=2, dim=C_axis)
-
-        X = (X + eps).log()
-        get_log_data_spec.log_data_spec = {
-            "eps": eps,
-            "mean": np.asarray(X.mean()).tolist(),
-            "std": np.asarray(X.std()).tolist(),
-        }
+            X = data.norm(p=2, dim=C_axis)
+            X = (X + eps).log()
+            get_log_data_spec.log_data_spec = {
+                "eps": eps,
+                "mean": X.mean().item(),
+                "std": X.std().item(),
+            }
         return data
 
     get_log_data_spec.log_data_spec = None
@@ -45,7 +50,7 @@ def get_dataset(args, config):
 
         dataset = Dummy_Wrapping_Dataset(
             path=config.path,
-            **vars(config.dataset_kwargs),
+            config=SST_config(**vars(config.dataset_kwargs)),
             transform=get_log_data_spec,
         )
 
