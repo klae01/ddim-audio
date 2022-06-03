@@ -1,8 +1,7 @@
 define: &f_size 256
 define: &low_level_ch 2
-define: &flatten_ch 512
 define: &t_size 1024
-define: &axis_format CTF
+define: &axis_format TFC
 define: &virtual_samplerate 48000
 define: &HPI False
 
@@ -15,48 +14,43 @@ data:
         t_size: *t_size
         virtual_samplerate: *virtual_samplerate
         use_numpy: False
-        dtype: torch.float
+        dtype: torch.bfloat16
         device: cuda
         axis: *axis_format
         HPI: *HPI
-    pfft_format: *axis_format
     num_workers: 0
 
+    log_polar_transform: True
+    normalize_dim: [0, 1] # or null
+
 model:
-    dtype: torch.cuda.FloatTensor
+    dtype: torch.cuda.BFloat16Tensor
     type: simple
 
     transformers:
         kwargs:
-            hidden_size: 512
+            local_kernel_size: 32
+            segment_size: 256
+
+            hidden_size: 768
             num_hidden_layers: 12
-            intermediate_size: 2048
+            intermediate_size: 1536
             hidden_dropout_prob: 0.1
             initializer_range: 0.02
-            layer_norm_eps: 0.000001
-        channels: 512
-        dtype: torch.cuda.FloatTensor
+            layer_norm_eps: 0.00000001
+        channels: 768
+        dtype: torch.cuda.BFloat16Tensor
 
     channels: *low_level_ch
     t_size: *t_size
     f_size: *f_size
 
-    ch: [32, 64, 96, 128, 192, 256]
-    krn: [3, 3, 3, 3, 3, 3]
-    res: [2, 2, 3, 3, 3, 3]
-    
-    var_type: fixedlarge
-    ema_rate: 0.9999
-    ema: True
-
 diffusion:
-    beta_schedule: linear
-    beta_start: 0.0001
-    beta_end: 0.02
-    num_diffusion_timesteps: 1000
+    training_beta: "np.linspace(1e-6, 6e-3, 1000)"
+    sampling_beta: "np.asarray([j*10**i for i in range(-6, 0) for j in [1, 2, 4, 6, 8]])"
 
 training:
-    batch_size: 14
+    batch_size: 128
     n_epochs: null
     n_iters: 5000000
     snapshot_freq: 5000
@@ -80,18 +74,18 @@ optimization:
             weight_decay: 0.00001
             optimizer: "AdamW"
             warmup: 10000
-            lr: 0.0002
-            min_rate: 0.1
-            beta: [0.9, 0.998]
+            lr: 0.0005
+            min_rate: 0.2
+            beta: [0.9, 0.999]
             amsgrad: false
             eps: 0.00000001
         default:
             top_level_name: []
-            weight_decay: 0.00005
-            optimizer: "Adam"
-            warmup: 2000
-            lr: 0.0001
-            min_rate: 0.8
+            weight_decay: 0.00001
+            optimizer: "AdamW"
+            warmup: 10000
+            lr: 0.0005
+            min_rate: 0.2
             beta: [0.9, 0.999]
             amsgrad: false
             eps: 0.00000001
