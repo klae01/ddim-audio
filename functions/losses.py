@@ -19,18 +19,21 @@ def model_loss_evaluation(
     y, sig_y = model(x, a_sqrt)
 
     avg_diff = e - y
-    sig_eps = sig_y + 1e-3
+    sig_eps = sig_y + 4e-3
 
     # scalar loss (NLL)
+    # Original design: log(sig).mean() + (diff / sig).square().mean() / 2
     diff = avg_diff[..., 0]
     sig = sig_eps[..., 0]
     loss = torch.log(sig).mean() + (diff / sig).square().mean() / 2
 
     # angular loss (NLL)
+    # Original design: log(1 - exp(-var / 2 * cos(diff)).mean()
     diff = avg_diff[..., 1]
-    sig = sig_eps[..., 1]
-    var = sig.square()
-    loss += torch.log1p(-torch.exp(-var / 2) * torch.cos(diff)).mean()
+    # for numerical stability,
+    # assume var <- std ** 2 / 2
+    var = sig_eps[..., 1]
+    loss += torch.log1p(-torch.exp(-var) * torch.cos(diff)).mean()
 
     with torch.no_grad():
         x_hat = utils.log_polar_invert(
