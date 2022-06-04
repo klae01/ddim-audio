@@ -7,14 +7,15 @@ def model_loss_evaluation(
     x0: torch.Tensor,
     e: torch.Tensor,
     a_sqrt: torch.Tensor,
+    a_coeff_sqrt: torch.Tensor,
     config,
 ):
     a_sqrt = a_sqrt.view(-1, 1, 1, 1)
-    a = a_sqrt.square()
+    a_coeff_sqrt = a_coeff_sqrt.view(-1, 1, 1, 1)
     x0_lp = utils.log_polar_convert(x0, config)
     e = utils.log_polar_noise_processing(e, config)
 
-    x = x0_lp * a_sqrt + e * (1 - a).sqrt()
+    x = x0_lp * a_sqrt + e * a_coeff_sqrt
     y, sig_y = model(x, a_sqrt)
 
     avg_diff = e - y
@@ -32,7 +33,9 @@ def model_loss_evaluation(
     loss += torch.log1p(-torch.exp(-var / 2) * torch.cos(diff)).mean()
 
     with torch.no_grad():
-        x_hat = utils.log_polar_invert(x0_lp + (1 / a - 1).sqrt() * (e - y), config)
+        x_hat = utils.log_polar_invert(
+            x0_lp + (a_coeff_sqrt / a_sqrt) * (e - y), config
+        )
 
         signal = x0.norm(dim=-1, p=2)
         noise = x_hat.norm(dim=-1, p=2) - signal

@@ -48,6 +48,10 @@ def classify_group(config, model):
     return {K: V for K, V in param_group.items() if V.params}
 
 
+def interpolate(x1, x2, r):
+    return (x1 - x2) * r + x2
+
+
 class Diffusion(object):
     def __init__(self, args, config):
         self.args = args
@@ -60,10 +64,16 @@ class Diffusion(object):
         dtype = self.alphas.dtype
         device = self.alphas.device
         t = torch.randint(low=1, high=self.num_timesteps, size=(n,), device=device)
-        a = self.alphas_cumprod_sqrt[t], self.alphas_cumprod_sqrt[t - 1]
-        a = torch.rand(n, dtype=dtype, device=device) * (a[0] - a[1]) + a[1]
+        s = torch.rand(n, dtype=dtype, device=device)
 
-        process_info = model_loss_evaluation(model, x, e, a, self.log_data_spec)
+        a = interpolate(self.alphas_cumprod_sqrt[t], self.alphas_cumprod_sqrt[t - 1], s)
+        a_coeff = interpolate(
+            self.alphas_cumprod_coeff_sqrt[t], self.alphas_cumprod_coeff_sqrt[t - 1], s
+        )
+
+        process_info = model_loss_evaluation(
+            model, x, e, a, a_coeff, self.log_data_spec
+        )
 
         loss = process_info["loss"]
         for K, V in process_info.items():
@@ -137,6 +147,7 @@ class Diffusion(object):
         self.alphas = 1 - self.betas
         self.alphas_cumprod = self.alphas.cumprod()
         self.alphas_cumprod_sqrt = np.sqrt(self.alphas_cumprod)
+        self.alphas_cumprod_coeff_sqrt = np.sqrt(1 - self.alphas_cumprod)
         self.num_timesteps = len(self.betas)
 
         # config dataset
@@ -154,8 +165,15 @@ class Diffusion(object):
 
         self.betas = torch.from_numpy(self.betas).type(self.config.model.dtype)
         self.alphas = torch.from_numpy(self.alphas).type(self.config.model.dtype)
-        self.alphas_cumprod = torch.from_numpy(self.alphas_cumprod).type(self.config.model.dtype)
-        self.alphas_cumprod_sqrt = torch.from_numpy(self.alphas_cumprod_sqrt).type(self.config.model.dtype)
+        self.alphas_cumprod = torch.from_numpy(self.alphas_cumprod).type(
+            self.config.model.dtype
+        )
+        self.alphas_cumprod_sqrt = torch.from_numpy(self.alphas_cumprod_sqrt).type(
+            self.config.model.dtype
+        )
+        self.alphas_cumprod_coeff_sqrt = torch.from_numpy(
+            self.alphas_cumprod_coeff_sqrt
+        ).type(self.config.model.dtype)
 
         # config optimizer & scheduler
         optimizers = {}
