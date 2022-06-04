@@ -17,16 +17,19 @@ def model_loss_evaluation(
     x = x0_lp * a_sqrt + e * (1 - a).sqrt()
     y, sig_y = model(x, a_sqrt)
 
-    # scalar loss (NLL)
-    diff = e[..., 0] - y[..., 0]
-    sig = sig_y[..., 0] + 1e-3
-    var = sig.square()
-    loss = torch.log1p(-torch.exp(-var / 2) * torch.cos(diff)).mean()
+    avg_diff = e - y
+    sig_eps = sig_y + 1e-3
 
-    # angular loss (NLL direct)
-    diff = e[..., 1] - y[..., 1]
-    sig = sig_y[..., 1] + 1e-3
-    loss += torch.log(sig).mean() + (diff / sig).square().mean() / 2
+    # scalar loss (NLL)
+    diff = avg_diff[..., 0]
+    sig = sig_eps[..., 0]
+    loss = torch.log(sig).mean() + (diff / sig).square().mean() / 2
+
+    # angular loss (NLL)
+    diff = avg_diff[..., 1]
+    sig = sig_eps[..., 1]
+    var = sig.square()
+    loss += torch.log1p(-torch.exp(-var / 2) * torch.cos(diff)).mean()
 
     with torch.no_grad():
         x_hat = utils.log_polar_invert(x0_lp + (1 / a - 1).sqrt() * (e - y), config)

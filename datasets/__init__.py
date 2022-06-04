@@ -16,7 +16,7 @@ def get_dataset(args, config):
         C_axis = config.axis.index("C")
         if config.dataset_kwargs.use_numpy:
             X = np.linalg.norm(data, ord=2, axis=C_axis)
-            X = (X + eps).log()
+            X = np.log(X + eps)
             get_log_data_spec.log_data_spec = {
                 "eps": eps,
                 "mean": X.mean().tolist(),
