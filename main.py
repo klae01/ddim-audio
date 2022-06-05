@@ -73,21 +73,6 @@ def parse_args_and_config():
         help="sampling approach (generalized or ddpm_noisy)",
     )
     parser.add_argument(
-        "--skip_type",
-        type=str,
-        default="uniform",
-        help="skip according to (uniform or quadratic)",
-    )
-    parser.add_argument(
-        "--timesteps", type=int, default=1000, help="number of steps involved"
-    )
-    parser.add_argument(
-        "--eta",
-        type=float,
-        default=0.0,
-        help="eta used to control the variances of sigma",
-    )
-    parser.add_argument(
         "--sequence",
         type=int,
         default=None,
