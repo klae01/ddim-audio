@@ -40,14 +40,7 @@ def log_polar_invert(x: torch.Tensor, config) -> torch.Tensor:
     )
 
 
-def log_polar_noise_processing(x: torch.Tensor, config) -> torch.Tensor:
-    # config is log_data_spec
-    std, mean = torch.std_mean(x[..., 1])
-    x[..., 1].sub_(mean).div_(std)
-    return x
-
-
-def angle_processing(x: torch.Tensor) -> torch.Tensor:
+def __angle_range_fit(x: torch.Tensor) -> torch.Tensor:
     # config is log_data_spec
     half_range = torch.pi
     full_range = half_range * 2
@@ -56,7 +49,46 @@ def angle_processing(x: torch.Tensor) -> torch.Tensor:
     return Z
 
 
-def log_polar_state_processing(x: torch.Tensor, config) -> torch.Tensor:
+def __angle_normalize(x: torch.Tensor) -> torch.Tensor:
     # config is log_data_spec
-    x[..., 1] = angle_processing(x[..., 1])
+    std, mean = torch.std_mean(x)
+    x.sub_(mean).div_(std)
+    return x
+
+
+@torch.no_grad()
+def angle_normalize(x: torch.Tensor) -> torch.Tensor:
+    # config is log_data_spec
+    angle = x[..., 1].clone()
+    for _ in range(4):
+        angle = __angle_normalize(angle)
+        angle = __angle_range_fit(angle)
+    # while True:
+    #     angle = __angle_normalize(angle)
+    #     r_angle = __angle_range_fit(angle)
+    #     print((r_angle != angle).sum().item())
+    #     if (r_angle == angle).all().item():
+    #         break
+    #     angle = r_angle
+    x[..., 1] = angle
+    return x
+
+
+@torch.no_grad()
+def angle_centering(x: torch.Tensor, move_mean) -> torch.Tensor:
+    # config is log_data_spec
+    angle = x[..., 1].clone()
+    if move_mean:
+        for _ in range(4):
+            angle = angle - angle.mean()
+            angle = __angle_range_fit(angle)
+        # while True:
+        #     angle = angle - angle.mean()
+        #     r_angle = __angle_range_fit(angle)
+        #     if (r_angle == angle).all().item():
+        #         break
+        #     angle = r_angle
+    else:
+        angle = __angle_range_fit(angle)
+    x[..., 1] = angle
     return x
