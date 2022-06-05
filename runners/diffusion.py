@@ -312,8 +312,12 @@ class Diffusion(object):
             x = self.sample_image(x, model, select_index=index)
 
         if self.config.sampling.denoise:
-            x = [denoise_2d(y.to(self.config.sampling.denoise_device)) for y in x]
-        x = [y.to("cpu").numpy() for y in x]
+            x = (
+                y.to(self.config.sampling.denoise_device).permute(0, 3, 1, 2) for y in x
+            )
+            x = [denoise_2d(y).permute(0, 2, 3, 1).to("cpu").numpy() for y in x]
+        else:
+            x = [y.numpy() for y in x]
         digits = np.ceil(np.log10(len(x) + 1)).astype(np.int32).tolist()
 
         for i in range(len(x)):
@@ -342,6 +346,7 @@ class Diffusion(object):
                 self.alphas_cumprod_sqrt,
                 self.alphas_cumprod_coeff_sqrt,
                 select_index=select_index,
+                config=self.log_data_spec,
             )
         else:
             raise NotImplementedError
