@@ -52,9 +52,11 @@ def model_loss_evaluation(
         )
 
     with torch.no_grad():
-        x_hat = x0_lp + (a_coeff_sqrt / a_sqrt) * (e - y)
         if config:
+            x_hat = x0_lp + (a_coeff_sqrt / a_sqrt) * (e - y)
             x_hat = utils.log_polar_invert(x_hat, config)
+        else:
+            x_hat = x0 + (a_coeff_sqrt / a_sqrt) * (e - y)
 
         signal = x0.norm(dim=-1, p=2)
         noise = x_hat.norm(dim=-1, p=2) - signal

@@ -174,7 +174,9 @@ class Diffusion(object):
             shuffle=True,
             num_workers=self.config.data.num_workers,
         )
-        self.log_data_spec = dict2namespace(log_data_spec)
+        self.log_data_spec = (
+            dict2namespace(log_data_spec) if log_data_spec else log_data_spec
+        )
 
         # config model
         model = Model(self.config)
