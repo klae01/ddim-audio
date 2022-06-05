@@ -64,6 +64,7 @@ sampling:
     batch_size: 64
     last_only: True
     denoise: True
+    denoise_device: cuda
     HPI: *HPI
     virtual_samplerate: *virtual_samplerate
 

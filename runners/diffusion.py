@@ -16,6 +16,7 @@ from PIL import Image
 from scipy.io.wavfile import write as WAV_write
 
 sys.path.append("External")
+from SST.utils import config as SST_config
 from SST.utils.wav2img import limit_length_img, pfft2img, pfft2wav
 from UPU.signal.denoise import denoise_2d
 from utils import dict2namespace
@@ -56,6 +57,25 @@ class Diffusion(object):
     def __init__(self, args, config):
         self.args = args
         self.config = config
+
+    def build_variable_from_beta(self):
+        # Beta Derived Variable Construction
+        self.alphas = 1 - self.betas
+        self.alphas_cumprod = self.alphas.cumprod()
+        self.alphas_cumprod_sqrt = np.sqrt(self.alphas_cumprod)
+        self.alphas_cumprod_coeff_sqrt = np.sqrt(1 - self.alphas_cumprod)
+        self.num_timesteps = len(self.betas)
+
+        io_type = self.config.model.dtype
+        self.betas = torch.from_numpy(self.betas).type(io_type)
+        self.alphas = torch.from_numpy(self.alphas).type(io_type)
+        self.alphas_cumprod = torch.from_numpy(self.alphas_cumprod).type(io_type)
+        self.alphas_cumprod_sqrt = torch.from_numpy(self.alphas_cumprod_sqrt).type(
+            io_type
+        )
+        self.alphas_cumprod_coeff_sqrt = torch.from_numpy(
+            self.alphas_cumprod_coeff_sqrt
+        ).type(io_type)
 
     def train_step(self, model, x, optimizers, schedulers, grad_group, step, epoch):
         n = x.size(0)
@@ -144,11 +164,7 @@ class Diffusion(object):
         )
         # build beta & alpha
         self.betas = eval(self.config.diffusion.training_beta)
-        self.alphas = 1 - self.betas
-        self.alphas_cumprod = self.alphas.cumprod()
-        self.alphas_cumprod_sqrt = np.sqrt(self.alphas_cumprod)
-        self.alphas_cumprod_coeff_sqrt = np.sqrt(1 - self.alphas_cumprod)
-        self.num_timesteps = len(self.betas)
+        self.build_variable_from_beta()
 
         # config dataset
         dataset, test_dataset, log_data_spec = get_dataset(self.args, self.config.data)
@@ -162,18 +178,6 @@ class Diffusion(object):
 
         # config model
         model = Model(self.config)
-
-        self.betas = torch.from_numpy(self.betas).type(self.config.model.dtype)
-        self.alphas = torch.from_numpy(self.alphas).type(self.config.model.dtype)
-        self.alphas_cumprod = torch.from_numpy(self.alphas_cumprod).type(
-            self.config.model.dtype
-        )
-        self.alphas_cumprod_sqrt = torch.from_numpy(self.alphas_cumprod_sqrt).type(
-            self.config.model.dtype
-        )
-        self.alphas_cumprod_coeff_sqrt = torch.from_numpy(
-            self.alphas_cumprod_coeff_sqrt
-        ).type(self.config.model.dtype)
 
         # config optimizer & scheduler
         optimizers = {}
@@ -253,10 +257,7 @@ class Diffusion(object):
     def sample(self):
         # build beta & alpha
         self.betas = eval(self.config.diffusion.sampling_beta)
-        self.alphas = 1 - self.betas
-        self.alphas_cumprod = self.alphas.cumprod()
-        self.alphas_cumprod_sqrt = self.alphas_cumprod.sqrt()
-        self.num_timesteps = len(self.betas)
+        self.build_variable_from_beta()
 
         # config model
         model = Model(self.config)
@@ -286,3 +287,61 @@ class Diffusion(object):
             self.sample_sequence(model)
         else:
             raise NotImplementedError("Sample procedeure not defined")
+
+    def sample_sequence(self, model):
+        config = self.config
+        sst_config = SST_config(**vars(self.config.data.dataset_kwargs))
+
+        x = torch.randn(
+            config.sampling.num_samples,
+            config.sampling.t_size,
+            config.model.f_size,
+            config.model.channels,
+        ).type(self.config.model.dtype)
+
+        if self.args.sequence in [-1, 0]:
+            index = range(self.num_timesteps)
+        else:
+            index = np.linspace(
+                1, self.num_timesteps, self.args.sequence, dtype=np.int32
+            )
+            index = set((self.num_timesteps - index).tolist())
+
+        # NOTE: This means that we are producing each predicted x0, not x_{t-1} at timestep t.
+        with torch.no_grad():
+            x = self.sample_image(x, model, select_index=index)
+
+        if self.config.sampling.denoise:
+            x = [denoise_2d(y.to(self.config.sampling.denoise_device)) for y in x]
+        x = [y.to("cpu").numpy() for y in x]
+        digits = np.ceil(np.log10(len(x) + 1)).astype(np.int32).tolist()
+
+        for i in range(len(x)):
+            for j, img in enumerate(x[i]):
+                path = os.path.join(self.args.image_folder, f"{j}_{i:0{digits}d}")
+                if self.config.data.dataset == "AUDIO":
+                    Image.fromarray(limit_length_img(pfft2img(img, sst_config))).save(
+                        path + ".png"
+                    )
+                    wav = pfft2wav(img, sst_config)
+                    WAV_write(
+                        path + ".wav",
+                        self.config.data.dataset_kwargs.samplerate,
+                        wav,
+                    )
+                else:
+                    Image.fromarray(img).save(path + ".png")
+
+    def sample_image(self, x, model, select_index=None):
+        if self.args.sample_type == "generalized":
+            from functions.denoising import generalized_steps
+
+            return generalized_steps(
+                x,
+                model,
+                self.alphas_cumprod_sqrt,
+                self.alphas_cumprod_coeff_sqrt,
+                select_index=select_index,
+            )
+        else:
+            raise NotImplementedError
