@@ -8,7 +8,7 @@ def generalized_steps(
 ):
     num_steps = len(a_sqrt)
     xs = []
-    alpha_push = torch.empty(x.size(0))
+    alpha_push = torch.empty(x.size(0)).type(x.type())
     for index in range(num_steps):
         a_s, a_cs = a_sqrt[-index - 1], a_coeff_sqrt[-index - 1]
         if index != 0:

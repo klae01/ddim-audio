@@ -58,27 +58,34 @@ def __angle_normalize(x: torch.Tensor) -> torch.Tensor:
 
 def angle_normalize(x: torch.Tensor) -> torch.Tensor:
     # config is log_data_spec
-    angle = x[..., 1].copy()
-    while True:
-        __angle_normalize(angle)
-        r_angle = __angle_range_fit(angle)
-        if r_angle == angle:
-            break
-        angle = r_angle
+    angle = x[..., 1].clone()
+    for _ in range(4):
+        angle = __angle_normalize(angle)
+        angle = __angle_range_fit(angle)
+    # while True:
+    #     angle = __angle_normalize(angle)
+    #     r_angle = __angle_range_fit(angle)
+    #     print((r_angle != angle).sum().item())
+    #     if (r_angle == angle).all().item():
+    #         break
+    #     angle = r_angle
     x[..., 1] = angle
     return x
 
 
 def angle_centering(x: torch.Tensor, move_mean) -> torch.Tensor:
     # config is log_data_spec
-    angle = x[..., 1].copy()
+    angle = x[..., 1].clone()
     if move_mean:
-        while True:
+        for _ in range(4):
             angle = angle - angle.mean()
-            r_angle = __angle_range_fit(angle)
-            if r_angle == angle:
-                break
-            angle = r_angle
+            angle = __angle_range_fit(angle)
+        # while True:
+        #     angle = angle - angle.mean()
+        #     r_angle = __angle_range_fit(angle)
+        #     if (r_angle == angle).all().item():
+        #         break
+        #     angle = r_angle
     else:
         angle = __angle_range_fit(angle)
     x[..., 1] = angle
