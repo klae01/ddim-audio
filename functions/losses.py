@@ -22,13 +22,13 @@ def model_loss_evaluation(
     sig_eps = sig_y + 4e-3
 
     # scalar loss (NLL)
-    # Original design: log(sig).mean() + (diff / sig).square().mean() / 2
+    # Original design: log(std).mean() + (diff / std).square().mean() / 2
     diff = avg_diff[..., 0]
     sig = sig_eps[..., 0]
     loss = torch.log(sig).mean() + (diff / sig).square().mean() / 2
 
     # angular loss (NLL)
-    # Original design: log(1 - exp(-var / 2 * cos(diff)).mean()
+    # Original design: log(1 - exp(-std**2 / 2) * cos(diff)).mean()
     diff = avg_diff[..., 1]
     # for numerical stability,
     # assume var <- std ** 2 / 2
