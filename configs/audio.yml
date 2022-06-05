@@ -22,7 +22,7 @@ data:
     num_workers: 0
 
     axis: *axis_format
-    log_polar_transform: True
+    log_polar_transform: False
 
 model:
     dtype: torch.cuda.BFloat16Tensor
