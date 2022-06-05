@@ -27,18 +27,21 @@ def model_loss_evaluation(
     # Original design: log(std).mean() + (diff / std).square().mean() / 2
     diff = avg_diff[..., 0]
     sig = sig_eps[..., 0]
-    detail["loss_scalar"] = torch.log(sig).mean() + (diff / sig).square().mean() / 2
+    loss = torch.log(sig).mean() + (diff / sig).square().mean() / 2
+    detail["loss_scalar"] = loss.detach().clone()
+    detail["loss"] = loss
 
     # angular loss (NLL)
     # Original design: log(std).mean() + ((diff mod 2 pi) / std).square().mean() / 2
     diff = avg_diff[..., 1]
     sig = sig_eps[..., 1]
     with torch.no_grad():
-        target_diff = utils.angle_centering(diff, move_mean=False)
+        target_diff = utils.angle_centering(diff.clone(), move_mean=False)
         moving_diff = diff - target_diff
     diff = diff - moving_diff
-    detail["loss_angular"] = torch.log(sig).mean() + (diff / sig).square().mean() / 2
-    detail["loss"] = detail["loss_scalar"] + detail["loss_angular"]
+    loss = torch.log(sig).mean() + (diff / sig).square().mean() / 2
+    detail["loss_angular"] = loss.detach().clone()
+    detail["loss"] += loss
 
     with torch.no_grad():
         x_hat = utils.log_polar_invert(

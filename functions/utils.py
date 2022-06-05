@@ -56,6 +56,7 @@ def __angle_normalize(x: torch.Tensor) -> torch.Tensor:
     return x
 
 
+@torch.no_grad()
 def angle_normalize(x: torch.Tensor) -> torch.Tensor:
     # config is log_data_spec
     angle = x[..., 1].clone()
@@ -73,6 +74,7 @@ def angle_normalize(x: torch.Tensor) -> torch.Tensor:
     return x
 
 
+@torch.no_grad()
 def angle_centering(x: torch.Tensor, move_mean) -> torch.Tensor:
     # config is log_data_spec
     angle = x[..., 1].clone()
