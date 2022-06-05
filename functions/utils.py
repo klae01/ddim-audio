@@ -47,7 +47,16 @@ def log_polar_noise_processing(x: torch.Tensor, config) -> torch.Tensor:
     return x
 
 
+def angle_processing(x: torch.Tensor) -> torch.Tensor:
+    # config is log_data_spec
+    half_range = torch.pi
+    full_range = half_range * 2
+    Y = torch.fmod(x + half_range, full_range)
+    Z = torch.fmod(Y + full_range, full_range) - half_range
+    return Z
+
+
 def log_polar_state_processing(x: torch.Tensor, config) -> torch.Tensor:
     # config is log_data_spec
-    x[..., 1] = (x[..., 1] + torch.pi).fmod(torch.pi * 2) - torch.pi
+    x[..., 1] = angle_processing(x[..., 1])
     return x
