@@ -12,24 +12,28 @@ from SST.utils import AudioDataset, config as SST_config
 def get_dataset(args, config):
     # take only data related config
     def get_log_data_spec(data):
-        eps = np.exp(-16).tolist()
-        C_axis = config.axis.index("C")
-        if config.dataset_kwargs.use_numpy:
-            X = np.linalg.norm(data, ord=2, axis=C_axis)
-            X = np.log(X + eps)
-            get_log_data_spec.log_data_spec = {
-                "eps": eps,
-                "mean": X.mean().tolist(),
-                "std": X.std().tolist(),
-            }
+        if config.log_polar_transform:
+            eps = np.exp(-16).tolist()
+            C_axis = config.axis.index("C")
+            if config.dataset_kwargs.use_numpy:
+                X = np.linalg.norm(data, ord=2, axis=C_axis)
+                X = np.log(X + eps)
+                get_log_data_spec.log_data_spec = {
+                    "eps": eps,
+                    "mean": X.mean().tolist(),
+                    "std": X.std().tolist(),
+                }
+            else:
+                X = data.norm(p=2, dim=C_axis)
+                X = (X + eps).log()
+                get_log_data_spec.log_data_spec = {
+                    "eps": eps,
+                    "mean": X.mean().item(),
+                    "std": X.std().item(),
+                }
         else:
-            X = data.norm(p=2, dim=C_axis)
-            X = (X + eps).log()
-            get_log_data_spec.log_data_spec = {
-                "eps": eps,
-                "mean": X.mean().item(),
-                "std": X.std().item(),
-            }
+            get_log_data_spec.log_data_spec = None
+
         return data
 
     get_log_data_spec.log_data_spec = None
