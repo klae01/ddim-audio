@@ -6,19 +6,18 @@ from typing import Tuple
 import numpy as np
 import torch
 import torch.nn as nn
-import transformers.activations
 
 sys.path.append("External")
 
 from linformer import LinformerSelfAttention
 from UPU.layers import Gate
-from UPU.layers.blocks import LSA_block
+from UPU.layers.residual.blocks import LSA_block
 
 Group_cnt = 32
 
 
 class Residual_Block(nn.Module):
-    def __init__(self, *, channels, kernel_size=3):
+    def __init__(self, channels, kernel_size=3):
         super().__init__()
         self.channels = channels
 
@@ -30,8 +29,6 @@ class Residual_Block(nn.Module):
                 for _ in range(3)
             ]
         )
-        torch.nn.init.zeros_(self.norm[-1].weight)
-        self.norm[-1].register_parameter("bias", None)
 
         self.conv = nn.Sequential(
             *[
@@ -69,7 +66,7 @@ class Upsample(nn.Module):
     def __init__(self, *, in_channels, out_channels):
         super().__init__()
         self.conv = nn.ConvTranspose2d(
-            in_channels, out_channels, kernel_size=2, stride=1, padding=1, bias=False
+            in_channels, out_channels, kernel_size=2, stride=2, bias=False
         )
         self.norm = nn.GroupNorm(Group_cnt, out_channels, affine=False)
 
@@ -88,7 +85,6 @@ class GlobalAttention(nn.Module):
 
     def forward(self, hidden_states: torch.Tensor):
         B, S, F = hidden_states.size()
-        assert S % self.num_segments == 0
 
         ctx_Q, ctx_K, ctx_V = (
             self.ctx_QKV(hidden_states).view(B, S, 3, self.heads, -1).unbind(dim=2)
@@ -96,18 +92,19 @@ class GlobalAttention(nn.Module):
 
         # b: batch / l: sequence / h: head / f: feature
         att = (
-            torch.einsum("bhf,blhf->blh", ctx_Q.mean(dim=-2), ctx_K)
+            torch.einsum("bhf,blhf->blh", ctx_Q.mean(dim=1), ctx_K)
             / (F / self.heads) ** 0.5
         )
         att_prob = self.dropout(att.softmax(dim=-2))
 
-        v = torch.einsum("blhf,blh->bhf", ctx_V, att_prob)
-        return self.to_out(v)
+        v = torch.einsum("blhf,blh->bhf", ctx_V, att_prob).view(B, -1)
+        return self.to_out(v).view(B, 1, F)
 
 
 class Block_set(nn.Module):
     def __init__(self, channels, f_size, config):
         # assume Attention include last linear layer
+        super(Block_set, self).__init__()
         self.layer1 = Residual_Block(channels)  # residual for diffusion
         self.layer2 = LinformerSelfAttention(
             channels, f_size, heads=config.heads, dropout=config.attn_dropout
@@ -130,17 +127,17 @@ class Block_set(nn.Module):
         x = self.layer1(x, temb)
         B, C, F, T = x.shape
 
-        x = x.permute(0, 3, 2, 1).view(B * T, F, C)
+        x = x.permute(0, 3, 2, 1).reshape(B * T, F, C)
         y = nn.functional.group_norm(
             self.layer2(x).view(-1, x.size(-1)), num_groups=Group_cnt
         )
         x = self.gate2(x, y.view(x.size()))
 
-        x = x.view(B, T, F, C).permute(0, 2, 1, 3).view(B * F, T, C)
+        x = x.view(B, T, F, C).permute(0, 2, 1, 3).reshape(B * F, T, C)
         y = nn.functional.group_norm(
             self.layer3(x).view(-1, x.size(-1)), num_groups=Group_cnt
         )
-        x = self.gate3(x, y.view(x.size()))
+        x = self.gate3(x, y.view(B * F, 1, C))
 
         x = x.view(B, F, T, C).permute(0, 3, 1, 2)
         x = self.layer4(x)
@@ -177,7 +174,7 @@ class BetaEmbedding(nn.Module):
     def forward(self, input):
         WIGT = iter(self.weight)
 
-        x = get_embedding(input, **self.embedding_config)
+        x = get_embedding(input, self.config)
         x = next(WIGT)(x)
         x = torch.nn.functional.silu(x)
         x = nn.functional.group_norm(x, num_groups=Group_cnt)
@@ -193,15 +190,14 @@ class BetaEmbedding(nn.Module):
 class G_mapping(nn.Module):
     def __init__(self, in_features, out_features):
         super().__init__()
-        self.weight = nn.Conv2d(in_features, out_features * 2, bias=True)
+        self.weight = nn.Conv2d(in_features, out_features * 2, kernel_size=1, bias=True)
         self.weight.bias.data.zero_()
 
     def forward(self, input):
         x = input
         x = self.weight(x)
-        μ, σ = x.chunk(2, 10)
+        μ, σ = x.chunk(2, 1)
         return μ, torch.sigmoid(σ)
-
 
 
 class Model(nn.Module):
@@ -223,7 +219,7 @@ class Model(nn.Module):
         ]
         self.temb = BetaEmbedding(sum(self.embedding_size), self.config.embedding)
 
-        input_ch = self.confg.io.patch_size**2 * self.config.io.channels
+        input_ch = self.config.io.patch_size**2 * self.config.io.channels
 
         self.gate = nn.ModuleList([Gate() for _ in self.config.res[:-1]])
 
@@ -241,10 +237,10 @@ class Model(nn.Module):
             self.residual_modules.append(Blocks)
 
         conv1 = nn.Sequential(
-            nn.Conv2d(input_ch, self.config.ch[0], 3, bias=False),
+            nn.Conv2d(input_ch, self.config.ch[0], 3, padding=1, bias=False),
             nn.SiLU(inplace=True),
             nn.GroupNorm(Group_cnt, 0, affine=False),
-            nn.Conv2d(self.config.ch[0], self.config.ch[0], 3, bias=False),
+            nn.Conv2d(self.config.ch[0], self.config.ch[0], 3, padding=1, bias=False),
             nn.GroupNorm(Group_cnt, 0, affine=False),
         )
         self.residual_modules[0].insert(0, conv1)
@@ -256,7 +252,9 @@ class Model(nn.Module):
             )
             res_m.insert(0, down)
         for ch, next_ch, res_m in zip(
-            self.config.ch, self.config.ch[-1::-1], self.residual_modules[-1::-1]
+            self.config.ch[-1::-1],
+            self.config.ch[-2::-1],
+            self.residual_modules[max(res_module_ref_index) :],
         ):
             up = Upsample(in_channels=ch, out_channels=next_ch)
             res_m.append(up)
@@ -269,11 +267,11 @@ class Model(nn.Module):
         gate = iter(self.gate[::-1])
 
         B, T, F, C = input.shape
-        P = self.confg.io.patch_size
+        P = self.config.io.patch_size
         x = input.view(B, T // P, P, F // P, P, C)
-        x = x.permute(0, 2, 4, 5, 3, 1).view(B, -1, F // P, T // P)
+        x = x.permute(0, 2, 4, 5, 3, 1).reshape(B, -1, F // P, T // P)
 
-        temb = self.temb(a)
+        temb = self.temb(a.view(-1))
         temb = torch.split(temb, self.embedding_size, dim=-1)
         temb = iter(temb)
 
@@ -285,14 +283,16 @@ class Model(nn.Module):
             for M in I:
                 if isinstance(M, Block_set):
                     x = M(x, next(temb))
+                else:
+                    x = M(x)
 
             if i + 1 < len(self.config.res):
                 HS.append(x)
 
         x = [
-            I.view(B, P, P, C, F // P, T // P)
+            I.reshape(B, P, P, C, F // P, T // P)
             .permute(0, 5, 1, 4, 2, 3)
-            .view(B, T, F, C)
+            .reshape(B, T, F, C)
             for I in x
         ]
 

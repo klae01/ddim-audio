@@ -9,4 +9,4 @@
 [submodule "External/UPU"]
 	path = External/UPU
 	url = https://github.com/klae01/UPU
-	branch = feature/reslsa
+	branch = develop
