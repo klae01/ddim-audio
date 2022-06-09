@@ -297,8 +297,8 @@ class Diffusion(object):
         x = torch.randn(
             config.sampling.num_samples,
             config.sampling.t_size,
-            config.model.f_size,
-            config.model.channels,
+            config.model.io.f_size,
+            config.model.io.channels,
         ).type(self.config.model.dtype)
 
         if self.args.sequence in [-1, 0]:

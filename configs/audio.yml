@@ -43,7 +43,7 @@ model:
     embedding:
         gamma: 0.0625
         scale: 50000
-        pos_emb_dim: 64
+        pos_emb_dim: 128
 
 diffusion:
     training_beta: "np.linspace(1e-6, 6e-3, 1000)"

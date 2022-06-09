@@ -9,7 +9,6 @@ import torch.nn as nn
 
 sys.path.append("External")
 
-from linformer import LinformerSelfAttention
 from UPU.layers import Gate
 from UPU.layers.residual.blocks import LSA_block
 
@@ -38,9 +37,9 @@ class Residual_Block(nn.Module):
                     kernel_size=kernel_size,
                     stride=1,
                     padding=kernel_size // 2,
-                    bias=True,
+                    bias=bias,
                 )
-                for _ in range(2)
+                for bias in [True, False]
             ]
         )
         self.gate_diffusion = Gate()
@@ -79,7 +78,7 @@ class GlobalAttention(nn.Module):
         assert hidden_size % heads == 0
         super(GlobalAttention, self).__init__()
         self.heads = heads
-        self.ctx_QKV = nn.Linear(hidden_size, hidden_size * 3, bias=False)
+        self.ctx_QKV = nn.Linear(hidden_size, hidden_size * 3)
         self.dropout = nn.Dropout(dropout)
         self.to_out = nn.Linear(hidden_size, hidden_size, bias=False)
 
@@ -101,13 +100,29 @@ class GlobalAttention(nn.Module):
         return self.to_out(v).view(B, 1, F)
 
 
+class SelfAttention(GlobalAttention):
+    def forward(self, hidden_states: torch.Tensor):
+        B, S, F = hidden_states.size()
+
+        ctx_Q, ctx_K, ctx_V = (
+            self.ctx_QKV(hidden_states).view(B, S, 3, self.heads, -1).unbind(dim=2)
+        )
+
+        # b: batch / l: sequence / h: head / f: feature
+        att = torch.einsum("bLhf,blhf->bLlh", ctx_Q, ctx_K) / (F / self.heads) ** 0.5
+        att_prob = self.dropout(att.softmax(dim=-2))
+
+        v = torch.einsum("blhf,bLlh->bLhf", ctx_V, att_prob).view(B, S, F)
+        return self.to_out(v)
+
+
 class Block_set(nn.Module):
     def __init__(self, channels, f_size, config):
         # assume Attention include last linear layer
         super(Block_set, self).__init__()
         self.layer1 = Residual_Block(channels)  # residual for diffusion
-        self.layer2 = LinformerSelfAttention(
-            channels, f_size, heads=config.heads, dropout=config.attn_dropout
+        self.layer2 = SelfAttention(
+            channels, heads=config.heads, dropout=config.attn_dropout
         )  # frequency axis attention
         self.layer3 = GlobalAttention(
             channels, heads=config.heads, dropout=config.attn_dropout
@@ -149,7 +164,9 @@ def get_embedding(a_sqrt, config):
         a_sqrt[..., None]
         * 10
         ** (
-            -torch.arange(config.pos_emb_dim, dtype=a_sqrt.dtype, device=a_sqrt.device)
+            -torch.arange(
+                config.pos_emb_dim // 2, dtype=a_sqrt.dtype, device=a_sqrt.device
+            )
             * config.gamma
         )
         * config.scale
@@ -160,7 +177,7 @@ def get_embedding(a_sqrt, config):
 class BetaEmbedding(nn.Module):
     def __init__(self, channel_sz, config):
         super().__init__()
-        pos_ch = 128
+        pos_ch = config.pos_emb_dim
 
         self.config = config
         emb_ch = 512
@@ -168,7 +185,7 @@ class BetaEmbedding(nn.Module):
         self.weight = nn.Sequential(
             torch.nn.Linear(pos_ch, emb_ch, bias=True),
             torch.nn.Linear(emb_ch, emb_ch, bias=True),
-            torch.nn.Linear(emb_ch, channel_sz, bias=True),
+            torch.nn.Linear(emb_ch, channel_sz, bias=False),
         )
 
     def forward(self, input):
@@ -237,7 +254,7 @@ class Model(nn.Module):
             self.residual_modules.append(Blocks)
 
         conv1 = nn.Sequential(
-            nn.Conv2d(input_ch, self.config.ch[0], 3, padding=1, bias=False),
+            nn.Conv2d(input_ch, self.config.ch[0], 3, padding=1, bias=True),
             nn.SiLU(inplace=True),
             nn.GroupNorm(Group_cnt, 0, affine=False),
             nn.Conv2d(self.config.ch[0], self.config.ch[0], 3, padding=1, bias=False),
