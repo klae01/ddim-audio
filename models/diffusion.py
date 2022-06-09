@@ -1,3 +1,4 @@
+import itertools
 import math
 import sys
 from typing import Tuple
@@ -5,257 +6,202 @@ from typing import Tuple
 import numpy as np
 import torch
 import torch.nn as nn
-import transformers.activations
 
 sys.path.append("External")
 
-from UPU.layers.normalize.groupnorm import GroupNorm1D
+from UPU.layers import Gate
+from UPU.layers.residual.blocks import LSA_block
+
+Group_cnt = 32
 
 
-class PoolingAttention(nn.Module):
-    def __init__(
-        self,
-        in_features: int,
-        attention_features: int,
-        segments: int,
-        max_pool_kernel: int,
-    ):
-        super(PoolingAttention, self).__init__()
-        self.attn = nn.Linear(in_features, attention_features * 6, bias=False)
-        self.segments = segments
-        self.max_pool_kernel = max_pool_kernel
-
-    def forward(self, inp: torch.Tensor):  # Shape: [Batch, Sequence, Features]
-        batch, sequence, features = inp.size()
-        assert sequence % self.segments == 0
-
-        qry, key, val, seg, loc, out = self.attn(inp).chunk(
-            6, 2
-        )  # 6x Shape: [Batch, Sequence, AttentionFeatures]
-
-        aggregated = qry.mean(1)  # Shape: [Batch, AttentionFeatures]
-        aggregated = torch.einsum(
-            "ba,bsa->bs", aggregated, key
-        )  # Shape: [Batch, Sequence]
-        aggregated = nn.functional.softmax(aggregated, 1)
-        aggregated = torch.einsum(
-            "bs,bsa,bza->bza", aggregated, val, out
-        )  # Shape: [Batch, Sequence, AttentionFeatures]
-
-        segment_max_pooled = seg.view(
-            batch, sequence // self.segments, self.segments, -1
-        )
-        segment_max_pooled = segment_max_pooled.amax(
-            2, keepdim=True
-        )  # Shape: [Batch, PooledSequence, 1, AttentionFeatures]
-        segment_max_pooled = segment_max_pooled * out.view(
-            batch, sequence // self.segments, self.segments, -1
-        )  # Shape: [Batch, PooledSequence, PoolSize, AttentionFeatures]
-        segment_max_pooled = segment_max_pooled.view(
-            batch, sequence, -1
-        )  # Shape: [Batch, Sequence, AttentionFeatures]
-
-        loc = loc.transpose(1, 2)  # Shape: [Batch, AttentionFeatures, Sequence]
-        local_max_pooled = nn.functional.max_pool1d(
-            loc, self.max_pool_kernel, 1, self.max_pool_kernel // 2
-        )
-        local_max_pooled = local_max_pooled.transpose(
-            1, 2
-        )  # Shape: [Batch, Sequence, AttentionFeatures]
-
-        return aggregated + segment_max_pooled + local_max_pooled
-
-
-class T_Layer(nn.Module):
-    # https://github.com/huggingface/transformers/blob/1c220ced8ecc5f12bc979239aa648747411f9fc4/src/transformers/activations.py#L37
-    def __init__(self, config):
+class Residual_Block(nn.Module):
+    def __init__(self, channels, kernel_size=3):
         super().__init__()
-        self.LayerNorm = nn.ModuleList(
-            [
-                nn.LayerNorm(config.hidden_size, eps=config.layer_norm_eps)
-                for _ in range(2)
+        self.channels = channels
+
+        self.norm = nn.Sequential(
+            *[
+                torch.nn.GroupNorm(
+                    num_groups=Group_cnt, num_channels=channels, eps=1e-6, affine=False
+                )
+                for _ in range(3)
             ]
         )
-        self.Attention = PoolingAttention(
-            config.hidden_size,
-            config.hidden_size,
-            config.segment_size,
-            config.local_kernel_size,
+
+        self.conv = nn.Sequential(
+            *[
+                torch.nn.Conv2d(
+                    channels,
+                    channels,
+                    kernel_size=kernel_size,
+                    stride=1,
+                    padding=kernel_size // 2,
+                    bias=bias,
+                )
+                for bias in [True, False]
+            ]
         )
-        self.output = nn.Linear(config.hidden_size, config.hidden_size)
+        self.gate_diffusion = Gate()
+        self.gate_residual = Gate()
 
-        self.dense_0 = nn.Linear(
-            config.hidden_size, config.intermediate_size, bias=False
-        )
-        self.dense_1 = nn.Linear(
-            config.hidden_size, config.intermediate_size, bias=False
-        )
-        self.dense_2 = nn.Linear(
-            config.intermediate_size, config.hidden_size, bias=False
-        )
-        self.activation = transformers.activations.gelu_new
-        self.dropout = nn.ModuleList(
-            [nn.Dropout(config.hidden_dropout_prob) for _ in range(3)]
-        )
+    def forward(self, input, temb):
+        NORM = iter(self.norm)
+        CONV = iter(self.conv)
+        x = input
 
-        self.rezero = nn.Parameter(torch.tensor(0.0))
+        x = next(NORM)(x)
+        x = next(CONV)(x)
+        x = self.gate_diffusion(x, temb[..., None, None])
 
-    def forward(self, hidden_states):
-        dropout = iter(self.dropout)
-        LayerNorm = iter(self.LayerNorm)
-
-        stream = x = hidden_states
-        x = next(LayerNorm)(x)
-        x = self.Attention(x)
-        x = self.output(x)
-        x = next(dropout)(x)
-        stream = x = stream + x * self.rezero
-
-        x = next(LayerNorm)(x)
-        x = self.activation(self.dense_0(x)) * self.dense_1(x)
-        x = next(dropout)(x)
-        x = self.dense_2(x)
-        x = next(dropout)(x)
-        stream = x = stream + x * self.rezero
-
-        return stream
+        x = nn.functional.silu(x)
+        x = next(NORM)(x)
+        x = next(CONV)(x)
+        x = next(NORM)(x)
+        return self.gate_residual(input, x)
 
 
-class T_Encoder(nn.Module):
-    def __init__(self, config):
-        # take only model config
+class Upsample(nn.Module):
+    def __init__(self, *, in_channels, out_channels):
         super().__init__()
-        self.config = config
-        self.layer = nn.ModuleList(
-            [T_Layer(config) for _ in range(config.num_hidden_layers)]
+        self.conv = nn.ConvTranspose2d(
+            in_channels, out_channels, kernel_size=2, stride=2, bias=False
         )
-        self.LayerNorm = nn.LayerNorm(config.hidden_size, eps=config.layer_norm_eps)
-        self.dropout = nn.Dropout(config.hidden_dropout_prob)
-
-    def forward(self, hidden_states):
-        for i, layer_module in enumerate(self.layer):
-            hidden_states = layer_module(hidden_states)
-        hidden_states = self.LayerNorm(hidden_states)
-        hidden_states = self.dropout(hidden_states)
-        return hidden_states
-
-
-@torch.no_grad()
-def Add_Encoding(data):
-    length = data.shape[-2]
-    channel = data.shape[-1]
-    position = torch.arange(length, dtype=data.dtype, device=data.device).unsqueeze(1)
-    div_term = torch.exp(
-        torch.arange(0, channel, 2, dtype=data.dtype, device=data.device)
-        * (-math.log(10000.0) / channel)
-    )
-    x = position * div_term
-    data[..., 0::2] += torch.sin(x)
-    data[..., 1::2] += torch.cos(x)
-
-
-class T_Embedding(nn.Module):
-    def __init__(self, config):
-        # take only model config
-        super().__init__()
-        self.te = None
-        in_channels = config.hidden_size
-        self.LayerNorm = nn.LayerNorm(in_channels, eps=config.layer_norm_eps)
-        self.projection = nn.Linear(in_channels, config.hidden_size)
-        self.dropout = nn.Dropout(config.hidden_dropout_prob)
-
-    def forward(self, input):
-        if self.te == None or self.te.size(0) > input.size(1):
-            size = input.size(1)
-            size = 2 ** math.ceil(math.log2(size))
-            self.te = torch.zeros(
-                size, input.size(2), dtype=input.dtype, device=input.device
-            )
-            Add_Encoding(self.te)
-
-        x = input + self.te[: input.size(1)]
-
-        x = self.LayerNorm(x)
-        x = self.projection(x)
-        x = self.dropout(x)
-        return x
-
-
-class T_Module(nn.Module):
-    def __init__(self, config):
-        # config contains only model.transformers
-        super().__init__()
-        self.embedding = T_Embedding(config)
-        self.encoder = T_Encoder(config)
-
-    def _init_weights(self, module):
-        if isinstance(module, nn.LayerNorm):
-            module.weight.data.fill_(1.0)
-        elif isinstance(module, nn.Linear):
-            module.weight.data.normal_(mean=0.0, std=module.in_features**-0.5)
-            if hasattr(module, "bias"):
-                module.bias.data.zero_()
+        self.norm = nn.GroupNorm(Group_cnt, out_channels, affine=False)
 
     def forward(self, x):
-        x = self.embedding(x)
-        x = self.encoder(x)
+        return self.norm(self.conv(x))
+
+
+class GlobalAttention(nn.Module):
+    def __init__(self, hidden_size: int, heads: int = 8, dropout: float = 0.0):
+        assert hidden_size % heads == 0
+        super(GlobalAttention, self).__init__()
+        self.heads = heads
+        self.ctx_QKV = nn.Linear(hidden_size, hidden_size * 3)
+        self.dropout = nn.Dropout(dropout)
+        self.to_out = nn.Linear(hidden_size, hidden_size, bias=False)
+
+        self.ctx_QKV.bias.data.zero_()
+
+    def forward(self, hidden_states: torch.Tensor):
+        B, S, F = hidden_states.size()
+
+        ctx_Q, ctx_K, ctx_V = (
+            self.ctx_QKV(hidden_states).view(B, S, 3, self.heads, -1).unbind(dim=2)
+        )
+
+        # b: batch / l: sequence / h: head / f: feature
+        att = (
+            torch.einsum("bhf,blhf->blh", ctx_Q.mean(dim=1), ctx_K)
+            / (F / self.heads) ** 0.5
+        )
+        att_prob = self.dropout(att.softmax(dim=-2))
+
+        v = torch.einsum("blhf,blh->bhf", ctx_V, att_prob).view(B, -1)
+        return self.to_out(v).view(B, 1, F)
+
+
+class SelfAttention(GlobalAttention):
+    def forward(self, hidden_states: torch.Tensor):
+        B, S, F = hidden_states.size()
+
+        ctx_Q, ctx_K, ctx_V = (
+            self.ctx_QKV(hidden_states).view(B, S, 3, self.heads, -1).unbind(dim=2)
+        )
+
+        # b: batch / l: sequence / h: head / f: feature
+        att = torch.einsum("bLhf,blhf->bLlh", ctx_Q, ctx_K) / (F / self.heads) ** 0.5
+        att_prob = self.dropout(att.softmax(dim=-2))
+
+        v = torch.einsum("blhf,bLlh->bLhf", ctx_V, att_prob).view(B, S, F)
+        return self.to_out(v)
+
+
+class Block_set(nn.Module):
+    def __init__(self, channels, f_size, config):
+        # assume Attention include last linear layer
+        super(Block_set, self).__init__()
+        self.layer1 = Residual_Block(channels)  # residual for diffusion
+        self.layer2 = SelfAttention(
+            channels, heads=config.heads, dropout=config.attn_dropout
+        )  # frequency axis attention
+        self.layer3 = GlobalAttention(
+            channels, heads=config.heads, dropout=config.attn_dropout
+        )  # time axis attention
+        self.layer4 = LSA_block(
+            channels,
+            channels,
+            local_window_size=config.local_window_size,
+            normalize_group_size=Group_cnt,
+        )
+
+        self.gate2 = Gate()
+        self.gate3 = Gate()
+
+    def forward(self, x, temb):
+        # x order = BCFT
+        x = self.layer1(x, temb)
+        B, C, F, T = x.shape
+
+        x = x.permute(0, 3, 2, 1).reshape(B * T, F, C)
+        y = nn.functional.group_norm(
+            self.layer2(x).view(-1, x.size(-1)), num_groups=Group_cnt
+        )
+        x = self.gate2(x, y.view(x.size()))
+
+        x = x.view(B, T, F, C).permute(0, 2, 1, 3).reshape(B * F, T, C)
+        y = nn.functional.group_norm(
+            self.layer3(x).view(-1, x.size(-1)), num_groups=Group_cnt
+        )
+        x = self.gate3(x, y.view(B * F, 1, C))
+
+        x = x.view(B, F, T, C).permute(0, 3, 1, 2)
+        x = self.layer4(x)
         return x
 
 
-def get_embedding(a_sqrt, gamma, scale):
+def get_embedding(a_sqrt, config):
     X = (
         a_sqrt[..., None]
         * 10
         ** (
-            -torch.linspace(0, 63, 64, dtype=a_sqrt.dtype, device=a_sqrt.device) / gamma
+            -torch.arange(
+                config.pos_emb_dim // 2, dtype=a_sqrt.dtype, device=a_sqrt.device
+            )
+            * config.gamma
         )
-        * scale
+        * config.scale
     )
     return torch.cat([torch.sin(X), torch.cos(X)], dim=-1)
 
 
-class Alpha_weight_Embedding(nn.Module):
-    def __init__(self, out_shape, divide, embedding_config):
+class BetaEmbedding(nn.Module):
+    def __init__(self, channel_sz, config):
         super().__init__()
-        self.out_shape = out_shape
-        self.divide = divide
-        self.embedding_config = embedding_config
-        pos_ch = 128
+        pos_ch = config.pos_emb_dim
+
+        self.config = config
         emb_ch = 512
-        out_features = np.prod(out_shape)
-        self.weight = nn.ModuleList(
-            [
-                nn.Linear(pos_ch, emb_ch, bias=True),
-                nn.Linear(emb_ch, emb_ch, bias=True),
-                nn.Linear(emb_ch // divide, out_features // divide, bias=False),
-            ]
+
+        self.weight = nn.Sequential(
+            torch.nn.Linear(pos_ch, emb_ch, bias=True),
+            torch.nn.Linear(emb_ch, emb_ch, bias=True),
+            torch.nn.Linear(emb_ch, channel_sz, bias=False),
         )
-        self.normal = nn.ModuleList(
-            [
-                nn.LayerNorm(emb_ch),
-                nn.LayerNorm(emb_ch),
-                nn.LayerNorm(out_features),
-            ]
-        )
-        self.normal[-1].weight.data.zero_()
-        torch.nn.init.orthogonal_(self.normal[-1].bias.view(out_shape))
 
     def forward(self, input):
         WIGT = iter(self.weight)
-        NORM = iter(self.normal)
-        x = get_embedding(input, **self.embedding_config)
 
+        x = get_embedding(input, self.config)
         x = next(WIGT)(x)
-        x = nn.functional.silu(x)
-        x = next(NORM)(x)
+        x = torch.nn.functional.silu(x)
+        x = nn.functional.group_norm(x, num_groups=Group_cnt)
         x = next(WIGT)(x)
-        x = nn.functional.silu(x)
-        x = next(NORM)(x)
-
-        W = next(WIGT)
-        x = torch.cat([W(I) for I in x.chunk(self.divide, -1)], axis=-1)
-        x = next(NORM)(x)
-        x = x.view(input.size(0), *self.out_shape)
+        x = torch.nn.functional.silu(x)
+        x = nn.functional.group_norm(x, num_groups=Group_cnt)
+        x = next(WIGT)(x)
+        x = nn.functional.layer_norm(x, x.shape[1:])
 
         return x
 
@@ -263,13 +209,13 @@ class Alpha_weight_Embedding(nn.Module):
 class G_mapping(nn.Module):
     def __init__(self, in_features, out_features):
         super().__init__()
-        self.weight = nn.Linear(in_features, out_features * 2, bias=True)
+        self.weight = nn.Conv2d(in_features, out_features * 2, kernel_size=1, bias=True)
         self.weight.bias.data.zero_()
 
     def forward(self, input):
         x = input
         x = self.weight(x)
-        μ, σ = x.chunk(2, -1)
+        μ, σ = x.chunk(2, 1)
         return μ, torch.sigmoid(σ)
 
 
@@ -279,45 +225,91 @@ class Model(nn.Module):
 
         self.config = config.model
         super().__init__()
-        hidden_size = self.config.transformers.kwargs.hidden_size
-        io_size = self.config.channels * self.config.f_size
-        self.AW_EMB = Alpha_weight_Embedding(
-            (hidden_size, io_size),
-            self.config.divide,
-            {"gamma": self.config.gamma, "scale": self.config.scale},
-        )
-        self.transformer = T_Module(self.config.transformers.kwargs)
-        self.Gaussian_mapping = G_mapping(hidden_size, io_size)
 
-        if self.config.dtype:
-            self.AW_EMB.type(self.config.dtype)
-            self.Gaussian_mapping.type(self.config.dtype)
-        if self.config.transformers.dtype:
-            self.transformer.type(self.config.transformers.dtype)
+        res_module_ref_index = list(
+            itertools.chain(
+                range(len(self.config.res)), range(len(self.config.res) - 2, -1, -1)
+            )
+        )
+        self.embedding_size = [
+            self.config.ch[i]
+            for i in res_module_ref_index
+            for _ in range(self.config.res[i])
+        ]
+        self.temb = BetaEmbedding(sum(self.embedding_size), self.config.embedding)
+
+        input_ch = self.config.io.patch_size**2 * self.config.io.channels
+
+        self.gate = nn.ModuleList([Gate() for _ in self.config.res[:-1]])
+
+        # downsample can place start of chunks
+        # upsample can place end of chunks
+
+        self.residual_modules = nn.ModuleList()
+
+        f_size = self.config.io.f_size // self.config.io.patch_size
+        for i, I in enumerate(res_module_ref_index):
+            f_current = f_size // (2**I)
+            Blocks = nn.ModuleList()
+            for _ in range(self.config.res[I]):
+                Blocks.append(Block_set(self.config.ch[I], f_current, self.config))
+            self.residual_modules.append(Blocks)
+
+        conv1 = nn.Conv2d(input_ch, self.config.ch[0], 1, bias=False)
+        nn.init.orthogonal_(conv1.weight)
+        conv1 = nn.Sequential(conv1, nn.GroupNorm(Group_cnt, 0, affine=False))
+
+        self.residual_modules[0].insert(0, conv1)
+        for prev_ch, ch, res_m in zip(
+            self.config.ch, self.config.ch[1:], self.residual_modules[1:]
+        ):
+            down = LSA_block(
+                prev_ch, ch, stride=2, local_window_size=self.config.local_window_size
+            )
+            res_m.insert(0, down)
+        for ch, next_ch, res_m in zip(
+            self.config.ch[-1::-1],
+            self.config.ch[-2::-1],
+            self.residual_modules[max(res_module_ref_index) :],
+        ):
+            up = Upsample(in_channels=ch, out_channels=next_ch)
+            res_m.append(up)
+        self.residual_modules[-1].append(G_mapping(self.config.ch[0], input_ch))
+
+        self.type(self.config.dtype)
 
     def forward(self, input, a) -> Tuple[torch.Tensor, torch.Tensor]:
         # input: [B, T, F, C]
+        gate = iter(self.gate[::-1])
 
-        x = input.view(*input.shape[:2], -1)
+        B, T, F, C = input.shape
+        P = self.config.io.patch_size
+        x = input.view(B, T // P, P, F // P, P, C)
+        x = x.permute(0, 2, 4, 5, 3, 1).reshape(B, -1, F // P, T // P)
 
-        weight = self.AW_EMB(a)
-        x = torch.einsum("BTF,BOF->BTO", x, weight)
+        temb = self.temb(a.view(-1))
+        temb = torch.split(temb, self.embedding_size, dim=-1)
+        temb = iter(temb)
 
+        HS = []
+        for i, I in enumerate(self.residual_modules):
+            if i >= len(self.config.res):
+                x = next(gate)(x, HS.pop(-1))
 
-        if (
-            self.config.transformers.dtype
-            and self.config.transformers.dtype != self.config.dtype
-        ):
-            x = x.type(self.config.transformers.dtype)
+            for M in I:
+                if isinstance(M, Block_set):
+                    x = M(x, next(temb))
+                else:
+                    x = M(x)
 
-        x = self.transformer(x)
+            if i + 1 < len(self.config.res):
+                HS.append(x)
 
-        if (
-            self.config.transformers.dtype
-            and self.config.transformers.dtype != self.config.dtype
-        ):
-            x = x.type(self.config.dtype)
-        
-        x = self.Gaussian_mapping(x)
+        x = [
+            I.reshape(B, P, P, C, F // P, T // P)
+            .permute(0, 5, 1, 4, 2, 3)
+            .reshape(B, T, F, C)
+            for I in x
+        ]
 
-        return [I.view(*input.shape) for I in x]
+        return x

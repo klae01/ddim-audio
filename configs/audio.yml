@@ -27,27 +27,23 @@ data:
 model:
     dtype: torch.cuda.BFloat16Tensor
     type: simple
+    attn_dropout: 0.2
+    heads: 8
+    local_window_size: 4
+    
+    res: [3, 3, 2]
+    ch: [256, 384, 512]
+    
+    io:
+        patch_size: 8
+        channels: *low_level_ch
+        t_size: *t_size
+        f_size: *f_size
 
-    transformers:
-        kwargs:
-            local_kernel_size: 31
-            segment_size: 256
-
-            hidden_size: 768
-            num_hidden_layers: 12
-            intermediate_size: 1536
-            hidden_dropout_prob: 0.1
-            initializer_range: 0.02
-            layer_norm_eps: 0.00000001
-        dtype: torch.cuda.BFloat16Tensor
-
-    channels: *low_level_ch
-    t_size: *t_size
-    f_size: *f_size
-
-    divide: 16
-    gamma: 0.0625
-    scale: 50000
+    embedding:
+        gamma: 0.0625
+        scale: 50000
+        pos_emb_dim: 128
 
 diffusion:
     training_beta: "np.linspace(1e-6, 6e-3, 1000)"
