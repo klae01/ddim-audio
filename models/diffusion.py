@@ -82,6 +82,8 @@ class GlobalAttention(nn.Module):
         self.dropout = nn.Dropout(dropout)
         self.to_out = nn.Linear(hidden_size, hidden_size, bias=False)
 
+        self.ctx_QKV.bias.data.zero_()
+
     def forward(self, hidden_states: torch.Tensor):
         B, S, F = hidden_states.size()
 
@@ -253,13 +255,10 @@ class Model(nn.Module):
                 Blocks.append(Block_set(self.config.ch[I], f_current, self.config))
             self.residual_modules.append(Blocks)
 
-        conv1 = nn.Sequential(
-            nn.Conv2d(input_ch, self.config.ch[0], 3, padding=1, bias=True),
-            nn.SiLU(inplace=True),
-            nn.GroupNorm(Group_cnt, 0, affine=False),
-            nn.Conv2d(self.config.ch[0], self.config.ch[0], 3, padding=1, bias=False),
-            nn.GroupNorm(Group_cnt, 0, affine=False),
-        )
+        conv1 = nn.Conv2d(input_ch, self.config.ch[0], 1, bias=False)
+        nn.init.orthogonal_(conv1.weight)
+        conv1 = nn.Sequential(conv1, nn.GroupNorm(Group_cnt, 0, affine=False))
+
         self.residual_modules[0].insert(0, conv1)
         for prev_ch, ch, res_m in zip(
             self.config.ch, self.config.ch[1:], self.residual_modules[1:]
