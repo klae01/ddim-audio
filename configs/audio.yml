@@ -46,8 +46,8 @@ model:
         pos_emb_dim: 128
 
 diffusion:
-    training_beta: "np.linspace(1e-6, 6e-3, 1000)"
-    sampling_beta: "np.asarray([j*10**i for i in range(-6, 0) for j in [1, 2, 3, 5, 7]])"
+    training_beta: "np.linspace(1e-4, 2e-2, 1000)"
+    sampling_beta: "np.linspace(1e-4, 3.5e-1, 50)"
 
 training:
     batch_size: 48
