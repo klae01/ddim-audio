@@ -88,11 +88,19 @@ class Attention(nn.Module):
             self.ctx_QKV(hidden_states).view(B, S, 3, self.heads, -1).unbind(dim=2)
         )
         ctx_Q, ctx_K = map(self.act, [ctx_Q, ctx_K])
-
         KV = torch.einsum("blhf,blhF->bhFf", ctx_K, ctx_V)
-        Z = torch.einsum("blhf,bhf->blf", ctx_Q, ctx_K.sum(dim=1)).reciprocal()
-        V = torch.einsum("blhf,bhFf,blf->blhF", ctx_Q, KV, Z)
-        return V
+
+        # Original implementation.
+        # Z = torch.einsum("blhf,bhf->blh", ctx_Q, ctx_K.sum(dim=1)).reciprocal()
+        # V = torch.einsum("blhf,bhFf,blh->blhF", ctx_Q, KV, Z)
+
+        # Memory efficient implementation
+        QZ = ctx_Q / (ctx_Q * ctx_K.sum(dim=1, keepdims=True)).sum(
+            dim=-1, keepdims=True
+        )
+        V = torch.einsum("blhf,bhFf->blhF", QZ, KV)
+
+        return V.reshape(B, S, F)
 
 
 class Block_set(nn.Module):
@@ -129,7 +137,7 @@ class Block_set(nn.Module):
         y = nn.functional.group_norm(
             self.layer3(x).view(-1, x.size(-1)), num_groups=Group_cnt
         )
-        x = self.gate3(x, y.view(B * F, 1, C))
+        x = self.gate3(x, y.view(x.size()))
 
         x = x.view(B, F, T, C).permute(0, 3, 1, 2)
         x = self.layer4(x)
