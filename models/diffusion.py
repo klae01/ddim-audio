@@ -73,49 +73,26 @@ class Upsample(nn.Module):
         return self.norm(self.conv(x))
 
 
-class GlobalAttention(nn.Module):
-    def __init__(self, hidden_size: int, heads: int = 8, dropout: float = 0.0):
+class Attention(nn.Module):
+    def __init__(self, hidden_size: int, heads: int = 8):
         assert hidden_size % heads == 0
-        super(GlobalAttention, self).__init__()
+        super(Attention, self).__init__()
         self.heads = heads
         self.ctx_QKV = nn.Linear(hidden_size, hidden_size * 3)
-        self.dropout = nn.Dropout(dropout)
-        self.to_out = nn.Linear(hidden_size, hidden_size, bias=False)
-
         self.ctx_QKV.bias.data.zero_()
+        self.act = lambda x: nn.functional.elu(x) + 1
 
     def forward(self, hidden_states: torch.Tensor):
         B, S, F = hidden_states.size()
-
         ctx_Q, ctx_K, ctx_V = (
             self.ctx_QKV(hidden_states).view(B, S, 3, self.heads, -1).unbind(dim=2)
         )
+        ctx_Q, ctx_K = map(self.act, [ctx_Q, ctx_K])
 
-        # b: batch / l: sequence / h: head / f: feature
-        att = (
-            torch.einsum("bhf,blhf->blh", ctx_Q.mean(dim=1), ctx_K)
-            / (F / self.heads) ** 0.5
-        )
-        att_prob = self.dropout(att.softmax(dim=-2))
-
-        v = torch.einsum("blhf,blh->bhf", ctx_V, att_prob).view(B, -1)
-        return self.to_out(v).view(B, 1, F)
-
-
-class SelfAttention(GlobalAttention):
-    def forward(self, hidden_states: torch.Tensor):
-        B, S, F = hidden_states.size()
-
-        ctx_Q, ctx_K, ctx_V = (
-            self.ctx_QKV(hidden_states).view(B, S, 3, self.heads, -1).unbind(dim=2)
-        )
-
-        # b: batch / l: sequence / h: head / f: feature
-        att = torch.einsum("bLhf,blhf->bLlh", ctx_Q, ctx_K) / (F / self.heads) ** 0.5
-        att_prob = self.dropout(att.softmax(dim=-2))
-
-        v = torch.einsum("blhf,bLlh->bLhf", ctx_V, att_prob).view(B, S, F)
-        return self.to_out(v)
+        KV = torch.einsum("blhf,blhF->bhFf", ctx_K, ctx_V)
+        Z = torch.einsum("blhf,bhf->blf", ctx_Q, ctx_K.sum(dim=1)).reciprocal()
+        V = torch.einsum("blhf,bhFf,blf->blhF", ctx_Q, KV, Z)
+        return V
 
 
 class Block_set(nn.Module):
@@ -123,12 +100,10 @@ class Block_set(nn.Module):
         # assume Attention include last linear layer
         super(Block_set, self).__init__()
         self.layer1 = Residual_Block(channels)  # residual for diffusion
-        self.layer2 = SelfAttention(
-            channels, heads=config.heads, dropout=config.attn_dropout
+        self.layer2 = Attention(
+            channels, heads=config.heads
         )  # frequency axis attention
-        self.layer3 = GlobalAttention(
-            channels, heads=config.heads, dropout=config.attn_dropout
-        )  # time axis attention
+        self.layer3 = Attention(channels, heads=config.heads)  # time axis attention
         self.layer4 = LSA_block(
             channels,
             channels,

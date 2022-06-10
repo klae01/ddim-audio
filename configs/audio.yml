@@ -27,7 +27,6 @@ data:
 model:
     dtype: torch.cuda.BFloat16Tensor
     type: simple
-    attn_dropout: 0.2
     heads: 8
     local_window_size: 4
     
