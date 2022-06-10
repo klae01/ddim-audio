@@ -1,3 +1,4 @@
+import math
 import torch
 from . import utils
 
@@ -24,7 +25,7 @@ def model_loss_evaluation(
     y, sig_y = model(x, a_sqrt)
 
     avg_diff = e - y
-    sig_eps = sig_y + 1e-4
+    sig_eps = sig_y + math.exp(-1)
 
     if config:
         # scalar loss (NLL)

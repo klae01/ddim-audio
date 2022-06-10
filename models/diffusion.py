@@ -107,40 +107,36 @@ class Block_set(nn.Module):
     def __init__(self, channels, f_size, config):
         # assume Attention include last linear layer
         super(Block_set, self).__init__()
-        self.layer1 = Residual_Block(channels)  # residual for diffusion
-        self.layer2 = Attention(
-            channels, heads=config.heads
-        )  # frequency axis attention
-        self.layer3 = Attention(channels, heads=config.heads)  # time axis attention
-        self.layer4 = LSA_block(
-            channels,
-            channels,
-            local_window_size=config.local_window_size,
-            normalize_group_size=Group_cnt,
+        self.layers = nn.ModuleList(
+            [
+                Residual_Block(channels),  # residual for diffusion
+                Attention(
+                    channels, heads=config.heads
+                ),  # frequency-time axis attention
+                LSA_block(
+                    channels,
+                    channels,
+                    local_window_size=config.local_window_size,
+                    normalize_group_size=Group_cnt,
+                ),
+            ]
         )
-
-        self.gate2 = Gate()
-        self.gate3 = Gate()
+        self.gate = Gate()
 
     def forward(self, x, temb):
         # x order = BCFT
-        x = self.layer1(x, temb)
+        layer = iter(self.layers)
+        x = next(layer)(x, temb)
         B, C, F, T = x.shape
 
-        x = x.permute(0, 3, 2, 1).reshape(B * T, F, C)
+        x = x.permute(0, 3, 2, 1).reshape(B, T * F, C)
         y = nn.functional.group_norm(
-            self.layer2(x).view(-1, x.size(-1)), num_groups=Group_cnt
+            next(layer)(x).view(-1, x.size(-1)), num_groups=Group_cnt
         )
-        x = self.gate2(x, y.view(x.size()))
+        x = self.gate(x, y.view(x.size()))
 
-        x = x.view(B, T, F, C).permute(0, 2, 1, 3).reshape(B * F, T, C)
-        y = nn.functional.group_norm(
-            self.layer3(x).view(-1, x.size(-1)), num_groups=Group_cnt
-        )
-        x = self.gate3(x, y.view(x.size()))
-
-        x = x.view(B, F, T, C).permute(0, 3, 1, 2)
-        x = self.layer4(x)
+        x = x.reshape(B, T, F, C).permute(0, 3, 2, 1)
+        x = next(layer)(x)
         return x
 
 
