@@ -91,7 +91,9 @@ class Attention(nn.Module):
         self.ctx_QKV_weight = nn.Parameter(
             torch.randn((3, heads, hidden_size // heads, hidden_size)) * 0.02
         )
-        self.ctx_QKV_bias = nn.Parameter(torch.zeros((3, 1, 1, hidden_size)))
+        self.ctx_QKV_bias = nn.Parameter(
+            torch.zeros((3, 1, 1, heads, hidden_size // heads))
+        )
         self.out_proj = nn.Parameter(torch.randn((hidden_size, hidden_size)) * 0.02)
         self.act = lambda x: nn.functional.elu(x) + 1
         self.norm = nn.ModuleList([Norm_layer(hidden_size) for _ in range(2)])
@@ -117,7 +119,7 @@ class Attention(nn.Module):
         QZ = ctx_Q / (ctx_Q * ctx_K.sum(1, True)).sum(-1, True)
         V = torch.einsum("blhf,bhFf->blhF", QZ, KV)
 
-        x = torch.einsum("blf,Ff->bFl", V.view(B, S, F), self.out_proj)
+        x = torch.einsum("blf,Ff->bFl", V.reshape(B, S, F), self.out_proj)
         x = next(NORM)(x)
         return self.gate(hidden_states, x)
 
@@ -251,7 +253,12 @@ class Model(nn.Module):
 
         input_ch = self.config.io.patch_size**2 * self.config.io.channels
 
-        self.gate = nn.ModuleList([Gate() for _ in self.config.res[:-1]])
+        self.gate = nn.ModuleList(
+            [
+                Gate(torch.tensor([0.0] * ch).view(-1, 1, 1))
+                for ch in self.config.ch[:-1]
+            ]
+        )
 
         # downsample can place start of chunks
         # upsample can place end of chunks
@@ -264,7 +271,9 @@ class Model(nn.Module):
             Blocks = nn.ModuleList()
             use_attention = self.config.use_attention[I]
             for _ in range(self.config.res[I]):
-                Blocks.append(Block_set(self.config.ch[I], f_current, self.config, use_attention))
+                Blocks.append(
+                    Block_set(self.config.ch[I], f_current, self.config, use_attention)
+                )
             self.residual_modules.append(Blocks)
 
         conv1 = Conv2d(input_ch, self.config.ch[0], 3, 1, 1, bias=False)
@@ -317,11 +326,14 @@ class Model(nn.Module):
             if i + 1 < len(self.config.res):
                 HS.append(x)
 
-        x = [
-            I.reshape(B, P, P, C, F // P, T // P)  # B tP fP C F T
+        convert = (
+            lambda x: x.reshape(B, P, P, C, F // P, T // P)  # B tP fP C F T
             .permute(0, 5, 1, 4, 2, 3)  # B T tP F fP C
             .reshape(B, T, F, C)
-            for I in x
-        ]
+        )
+        if isinstance(x, tuple):
+            x = map(convert, x)
+        else:
+            x = convert(x)
 
         return x

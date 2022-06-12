@@ -101,12 +101,11 @@ class Diffusion(object):
             self.config.tb_logger.add_scalar(K, V.item(), global_step=step)
         for K, V in model.named_parameters():
             if "rezero" in K:
-                try:
-                    for i, I in enumerate(V):
-                        self.config.tb_logger.add_scalar(
-                            f"{K}.{i}", I.item(), global_step=step
-                        )
-                except:
+                if V.shape:
+                    self.config.tb_logger.add_scalar(
+                        f"{K}_norm", V.norm(p=2).item(), global_step=step
+                    )
+                else:
                     self.config.tb_logger.add_scalar(f"{K}", V.item(), global_step=step)
 
         loggings = {

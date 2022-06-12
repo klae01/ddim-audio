@@ -23,8 +23,9 @@ def model_loss_evaluation(
     else:
         x = x0 * a_sqrt + e * a_coeff_sqrt
 
+    y = model(x, a_sqrt)
     if mapping.gaussian:
-        y, sig_y = model(x, a_sqrt)
+        y, sig_y = y
 
         avg_diff = e - y
         sig_eps = sig_y + mapping.gaussian_eps
@@ -54,8 +55,7 @@ def model_loss_evaluation(
                 torch.log(sig_eps).mean() + (avg_diff / sig_eps).square().mean() / 2
             )
     else:
-        y = model(x, a_sqrt)
-        detail["loss"] = (x - y).square().mean()
+        detail["loss"] = (e - y).square().mean()
 
 
     with torch.no_grad():
