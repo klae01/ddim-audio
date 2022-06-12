@@ -9,10 +9,10 @@ sys.path.append("External")
 from SST.utils import AudioDataset, config as SST_config
 
 
-def get_dataset(args, config):
+def get_dataset(args, config, mapping):
     # take only data related config
     def get_log_data_spec(data):
-        if config.log_polar_transform:
+        if mapping.log_polar:
             eps = np.exp(-16).tolist()
             C_axis = config.axis.index("C")
             if config.dataset_kwargs.use_numpy:

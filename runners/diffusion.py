@@ -57,6 +57,7 @@ class Diffusion(object):
     def __init__(self, args, config):
         self.args = args
         self.config = config
+        self.mapping = config.mapping
 
     def build_variable_from_beta(self):
         # Beta Derived Variable Construction
@@ -92,7 +93,7 @@ class Diffusion(object):
         )
 
         process_info = model_loss_evaluation(
-            model, x, e, a, a_coeff, self.log_data_spec
+            model, x, e, a, a_coeff, spec = self.log_data_spec, mapping=self.mapping
         )
 
         loss = process_info["loss"]
@@ -167,7 +168,7 @@ class Diffusion(object):
         self.build_variable_from_beta()
 
         # config dataset
-        dataset, test_dataset, log_data_spec = get_dataset(self.args, self.config.data)
+        dataset, test_dataset, log_data_spec = get_dataset(self.args, self.config.data, self.config.mapping)
         train_loader = data.DataLoader(
             dataset,
             batch_size=self.config.training.batch_size,
@@ -348,7 +349,7 @@ class Diffusion(object):
                 self.alphas_cumprod_sqrt,
                 self.alphas_cumprod_coeff_sqrt,
                 select_index=select_index,
-                config=self.log_data_spec,
+                spec = self.log_data_spec, mapping=self.mapping
             )
         else:
             raise NotImplementedError

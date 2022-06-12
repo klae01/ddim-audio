@@ -5,6 +5,10 @@ define: &axis_format TFC
 define: &virtual_samplerate 48000
 define: &HPI False
 
+mapping:
+    log_polar: False
+    gaussian: False
+    gaussian_eps: 0.00001
 
 data:
     dataset: AUDIO
@@ -22,19 +26,18 @@ data:
     num_workers: 0
 
     axis: *axis_format
-    log_polar_transform: False
 
 model:
     dtype: torch.cuda.BFloat16Tensor
     type: simple
     heads: 8
-    local_window_size: 4
     
-    res: [3, 3, 2]
-    ch: [256, 384, 512]
+    use_attention: [False, False, True, True]
+    res: [2, 3, 3, 5]
+    ch: [128, 192, 256, 384]
     
     io:
-        patch_size: 8
+        patch_size: 4
         channels: *low_level_ch
         t_size: *t_size
         f_size: *f_size
