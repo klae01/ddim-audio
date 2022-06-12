@@ -93,7 +93,7 @@ class Diffusion(object):
         )
 
         process_info = model_loss_evaluation(
-            model, x, e, a, a_coeff, spec = self.log_data_spec, mapping=self.mapping
+            model, x, e, a, a_coeff, spec=self.log_data_spec, mapping=self.mapping
         )
 
         loss = process_info["loss"]
@@ -103,7 +103,7 @@ class Diffusion(object):
             if "rezero" in K:
                 if V.shape:
                     self.config.tb_logger.add_scalar(
-                        f"{K}_norm", V.norm(p=2).item(), global_step=step
+                        f"{K}_std", V.std().item(), global_step=step
                     )
                 else:
                     self.config.tb_logger.add_scalar(f"{K}", V.item(), global_step=step)
@@ -167,7 +167,9 @@ class Diffusion(object):
         self.build_variable_from_beta()
 
         # config dataset
-        dataset, test_dataset, log_data_spec = get_dataset(self.args, self.config.data, self.config.mapping)
+        dataset, test_dataset, log_data_spec = get_dataset(
+            self.args, self.config.data, self.config.mapping
+        )
         train_loader = data.DataLoader(
             dataset,
             batch_size=self.config.training.batch_size,
@@ -348,7 +350,8 @@ class Diffusion(object):
                 self.alphas_cumprod_sqrt,
                 self.alphas_cumprod_coeff_sqrt,
                 select_index=select_index,
-                spec = self.log_data_spec, mapping=self.mapping
+                spec=self.log_data_spec,
+                mapping=self.mapping,
             )
         else:
             raise NotImplementedError
