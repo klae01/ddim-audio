@@ -17,47 +17,68 @@ from UPU.layers import Gate
 Group_cnt = 32
 
 
-def Norm_layer(channels, affine=True, Group_cnt=Group_cnt):
-    return nn.GroupNorm(Group_cnt, channels, eps=1e-8, affine=affine)
+def Norm_layer(channels, affine=True, group_cnt=None):
+    if group_cnt is None:
+        group_cnt = max(channels // 16, 1)
+    return nn.GroupNorm(group_cnt, channels, eps=1e-8, affine=affine)
+
+
+class shortcut(nn.Module):
+    def __init__(self, in_channels, out_channels, stride=1):
+        super().__init__()
+        self.in_channels = in_channels
+        self.out_channels = out_channels
+        self.stride = stride
+
+    def forward(self, x):
+        if self.stride != 1:
+            x = nn.functional.avg_pool2d(
+                x, self.stride, self.stride, ceil_mode=True, count_include_pad=False
+            )
+        if self.in_channels != self.out_channels:
+            padding = self.out_channels - self.in_channels
+            x = nn.functional.pad(x, (0, 0, 0, 0, padding, 0))
+
+        return x
 
 
 class Residual_Block(nn.Module):
-    def __init__(self, channels, kernel_size=3):
+    def __init__(self, in_channels, out_channels, kernel_size=3, stride=1):
         super().__init__()
-        self.channels = channels
-
-        self.norm = nn.ModuleList([Norm_layer(channels) for _ in range(3)])
-
-        self.conv = nn.Sequential(
-            *[
-                Conv2d(
-                    channels,
-                    channels,
-                    kernel_size=kernel_size,
-                    stride=1,
-                    padding=kernel_size // 2,
-                    bias=bias,
+        chs = [in_channels, out_channels // 4, out_channels // 4, out_channels]
+        self.norm = nn.ModuleList([Norm_layer(ch) for ch in chs])
+        self.conv = nn.ModuleList(
+            [
+                Conv2d(ch_in, ch_out, k, 1, k // 2, bias=bias)
+                for ch_in, ch_out, k, bias in zip(
+                    chs, chs[1:], [1, kernel_size, 1], [True, True, False]
                 )
-                for bias in [True, False]
             ]
         )
-        self.gate_diffusion = Gate(torch.tensor([0.0] * channels).view(-1, 1, 1))
-        self.gate_residual = Gate(torch.tensor([0.0] * channels).view(-1, 1, 1))
+        self.gate_diffusion = Gate(torch.tensor([0.0] * chs[1]).view(-1, 1, 1))
+        self.gate_residual = Gate(torch.tensor([0.0] * chs[-1]).view(-1, 1, 1))
+        self.shortcut = shortcut(in_channels, out_channels, stride)
 
     def forward(self, input, temb):
         NORM = iter(self.norm)
         CONV = iter(self.conv)
         x = input
+        identity = self.shortcut(x)
 
         x = next(NORM)(x)
         x = next(CONV)(x)
         x = self.gate_diffusion(x, temb[..., None, None])
-
         x = nn.functional.silu(x)
+
+        x = next(NORM)(x)
+        x = next(CONV)(x)
+        x = nn.functional.silu(x)
+
         x = next(NORM)(x)
         x = next(CONV)(x)
         x = next(NORM)(x)
-        return self.gate_residual(input, x)
+
+        return self.gate_residual(identity, x)
 
 
 class Upsample(nn.Module):
@@ -179,9 +200,9 @@ class BetaEmbedding(nn.Module):
         self.weight = nn.Sequential(
             nn.Linear(pos_ch, emb_ch, bias=True),
             nn.Linear(emb_ch, emb_ch, bias=True),
-            nn.Linear(emb_ch, channel_sz, bias=False),
+            nn.Linear(emb_ch, channel_sz, bias=True),
         )
-        self.norm = nn.ModuleList([Norm_layer(emb_ch, Group_cnt=1) for _ in range(2)])
+        self.norm = nn.ModuleList([Norm_layer(emb_ch) for _ in range(2)])
 
     def forward(self, input):
         WIGT = iter(self.weight)
@@ -195,7 +216,6 @@ class BetaEmbedding(nn.Module):
         x = nn.functional.silu(x)
         x = next(NORM)(x)
         x = next(WIGT)(x)
-        x = nn.functional.layer_norm(x, x.shape[1:])
 
         return x
 
@@ -245,7 +265,7 @@ class Model(nn.Module):
             )
         )
         self.embedding_size = [
-            self.config.ch[i]
+            self.config.ch[i] // 4
             for i in res_module_ref_index
             for _ in range(self.config.res[i])
         ]
@@ -265,7 +285,8 @@ class Model(nn.Module):
 
         self.residual_modules = nn.ModuleList()
 
-        f_size = self.config.io.f_size // self.config.io.patch_size
+        patch = self.config.io.patch_size
+        f_size = self.config.io.f_size // patch
         for i, I in enumerate(res_module_ref_index):
             f_current = f_size // (2**I)
             Blocks = nn.ModuleList()
@@ -276,7 +297,7 @@ class Model(nn.Module):
                 )
             self.residual_modules.append(Blocks)
 
-        conv1 = Conv2d(input_ch, self.config.ch[0], 3, 1, 1, bias=False)
+        conv1 = Conv2d(input_ch, self.config.ch[0], 7, patch, 3, bias=False)
         conv1 = nn.Sequential(conv1, Norm_layer(self.config.ch[0]))
 
         self.residual_modules[0].insert(0, conv1)

@@ -18,7 +18,7 @@ data:
         t_size: *t_size
         samplerate: *virtual_samplerate
         use_numpy: False
-        serve_dtype: torch.bfloat16
+        serve_dtype: torch.float
         device: cuda
         axis: *axis_format
         HPI: *HPI
@@ -28,16 +28,16 @@ data:
     axis: *axis_format
 
 model:
-    dtype: torch.cuda.BFloat16Tensor
+    dtype: torch.cuda.FloatTensor
     type: simple
     heads: 8
     
-    use_attention: [False, False, True, True]
-    res: [2, 3, 3, 5]
-    ch: [128, 192, 256, 384]
+    use_attention: [False, False, False, False, True, True]
+    res: [3, 3, 3, 3, 3, 3]
+    ch: [64, 96, 128, 192, 256, 512]
     
     io:
-        patch_size: 4
+        patch_size: 1
         channels: *low_level_ch
         t_size: *t_size
         f_size: *f_size
