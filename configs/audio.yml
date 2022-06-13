@@ -33,7 +33,7 @@ model:
     heads: 8
     
     use_attention: [False, False, False, False, True, True]
-    res: [3, 3, 3, 3, 3, 3]
+    res: [2, 2, 2, 4, 2, 4]
     ch: [64, 96, 128, 192, 256, 512]
     
     io:
@@ -43,8 +43,8 @@ model:
         f_size: *f_size
 
     embedding:
-        gamma: 0.0625
-        scale: 50000
+        gamma: 4
+        scale: 500
         pos_emb_dim: 128
 
 diffusion:

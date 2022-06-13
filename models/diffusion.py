@@ -30,15 +30,19 @@ class shortcut(nn.Module):
         self.out_channels = out_channels
         self.stride = stride
 
-    def forward(self, x):
+    def forward(self, x0, residual, rezero=None):
         if self.stride != 1:
             x = nn.functional.avg_pool2d(
-                x, self.stride, self.stride, ceil_mode=True, count_include_pad=False
+                x0, self.stride, self.stride, ceil_mode=True, count_include_pad=False
             )
-        if self.in_channels != self.out_channels:
-            padding = self.out_channels - self.in_channels
-            x = nn.functional.pad(x, (0, 0, 0, 0, padding, 0))
+        identity, direct = residual.split([self.in_channels], dim=1)
+        if rezero:
+            x = rezero(x, identity)
+        else:
+            x = x + identity
 
+        if self.in_channels != self.out_channels:
+            x = torch.cat([x, direct])
         return x
 
 
@@ -56,14 +60,13 @@ class Residual_Block(nn.Module):
             ]
         )
         self.gate_diffusion = Gate(torch.tensor([0.0] * chs[1]).view(-1, 1, 1))
-        self.gate_residual = Gate(torch.tensor([0.0] * chs[-1]).view(-1, 1, 1))
+        self.gate_residual = Gate(torch.tensor([0.0] * in_channels).view(-1, 1, 1))
         self.shortcut = shortcut(in_channels, out_channels, stride)
 
     def forward(self, input, temb):
         NORM = iter(self.norm)
         CONV = iter(self.conv)
         x = input
-        identity = self.shortcut(x)
 
         x = next(NORM)(x)
         x = next(CONV)(x)
@@ -78,7 +81,8 @@ class Residual_Block(nn.Module):
         x = next(CONV)(x)
         x = next(NORM)(x)
 
-        return self.gate_residual(identity, x)
+        x = self.shortcut(x)
+        return self.gate_residual(input, x, self.gate_residual)
 
 
 class Upsample(nn.Module):
@@ -176,14 +180,13 @@ class Block_set(nn.Module):
 
 def get_embedding(a_sqrt, config):
     X = (
-        a_sqrt[..., None]
-        * 10
-        ** (
-            -torch.arange(
-                config.pos_emb_dim // 2, dtype=a_sqrt.dtype, device=a_sqrt.device
+        a_sqrt[..., None] ** 0.5
+        * (
+            -torch.linspace(
+                0, 1, config.pos_emb_dim // 2, dtype=a_sqrt.dtype, device=a_sqrt.device
             )
             * config.gamma
-        )
+        ).exp()
         * config.scale
     )
     return torch.cat([X.sin(), X.cos()], dim=-1)
