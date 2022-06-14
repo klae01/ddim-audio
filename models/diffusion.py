@@ -2,7 +2,7 @@ import math
 import sys
 
 import torch
-import nn as nn
+import torch.nn as nn
 
 sys.path.append("External")
 
@@ -89,7 +89,7 @@ def get_timestep_embedding(time, embedding_dim):
 
 
 class BetaEmbedding(nn.Module):
-    def __init__(self, seq_length, channel_sz):
+    def __init__(self, channel_sz):
         super().__init__()
         self.pos_ch = 128
         emb_ch = 512
@@ -121,11 +121,12 @@ class Transformer_Module(nn.Module):
         exec(config.imports)
         self.projection = nn.Sequential(
             nn.Linear(io_channels, config.channels, bias=False),
-            Normalize(config.channels),
+            nn.LayerNorm(config.channels),
         )
         self.encoder = eval(config.module)(eval(config.config)(**vars(config.kwargs)))
         self.compute_out = nn.Sequential(
-            nn.Linear(config.channels, io_channels, bias=False), Normalize(io_channels)
+            nn.Linear(config.channels, io_channels, bias=False),
+            nn.LayerNorm(io_channels),
         )
 
     def forward(self, x):
@@ -169,9 +170,7 @@ class Model(nn.Module):
         ]
         embedding_size = embedding_size + embedding_size[::-1]
         self.embedding_size = embedding_size
-        self.temb = BetaEmbedding(
-            config.diffusion.num_diffusion_timesteps, sum(embedding_size)
-        )
+        self.temb = BetaEmbedding(sum(embedding_size))
 
         self.down_modules = nn.ModuleList()
         self.down_modules.append(
@@ -180,7 +179,7 @@ class Model(nn.Module):
                 self.config.ch[0],
                 kernel_size=7,
                 stride=1,
-                padding=1,
+                padding=3,
             )
         )
         self.up_modules = nn.ModuleList()
@@ -192,7 +191,7 @@ class Model(nn.Module):
                 stride=1,
                 padding=1,
             )
-            if self.mapping.gaussian
+            if not self.mapping.gaussian
             else G_mapping(self.config.ch[0], self.config.io.channels)
         )
         for prev_ch, ch, krn, res in zip(
@@ -259,11 +258,11 @@ class Model(nn.Module):
             and self.config.transformers.dtype != self.config.dtype
         ):
             x = x.type(self.config.transformers.dtype)
+        B, C, T, F = x.shape
         x = torch.permute(x, (0, 2, 1, 3))
-        shape_reserve = x.shape
-        x = x.reshape(*x.shape[:2], -1)
+        x = x.reshape(B, T, C * F)
         x = self.transformer(x)
-        x = x.reshape(*shape_reserve)
+        x = x.reshape(B, T, C, F)
         x = torch.permute(x, (0, 2, 1, 3))
         x = x.type(type_reserve)
 
@@ -279,5 +278,7 @@ class Model(nn.Module):
                     x = lay(x, next(temb))
                 else:
                     x = lay(x)
-
-        return x.permute(0, 2, 3, 1)
+        if self.mapping.gaussian:
+            return [I.permute(0, 2, 3, 1) for I in x]
+        else:
+            return x.permute(0, 2, 3, 1)

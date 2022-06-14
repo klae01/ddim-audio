@@ -63,7 +63,7 @@ class Diffusion(object):
         self.alphas_cumprod = self.alphas.cumprod()
         self.num_timesteps = len(self.betas)
         self.alphas_cumprod_interpolation = interp1d(
-            self.alphas_cumprod, np.arange(self.num_timesteps)
+            np.arange(self.num_timesteps), self.alphas_cumprod
         )
 
     def get_mix_ratio(self, time: np.ndarray):
@@ -244,20 +244,27 @@ class Diffusion(object):
             del states
 
         # training
-        step_args = [optimizers, schedulers, grad_group, ema_helper, step, epoch]
+        step_args = lambda: [
+            optimizers,
+            schedulers,
+            grad_group,
+            ema_helper,
+            step,
+            epoch,
+        ]
         if self.config.training.n_epochs is not None:
             for epoch in range(start_epoch, self.config.training.n_epochs):
                 model.train()
                 for x, y in train_loader:
                     step += 1
-                    self.train_step(model, x, *step_args)
+                    self.train_step(model, x, *step_args())
         else:
             epoch = start_epoch
             while step < self.config.training.n_iters:
                 model.train()
                 for x, y in train_loader:
                     step += 1
-                    self.train_step(model, x, *step_args)
+                    self.train_step(model, x, *step_args())
                     if step >= self.config.training.n_iters:
                         break
                 epoch += 1
