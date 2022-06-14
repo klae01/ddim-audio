@@ -1,23 +1,75 @@
+import math
 import torch
+from . import utils
 
 
-def noise_estimation_loss(
+def model_loss_evaluation(
     model,
     x0: torch.Tensor,
-    t: torch.LongTensor,
     e: torch.Tensor,
-    a: torch.Tensor,
-    keepdim=False,
+    a_sqrt: torch.Tensor,
+    a_coeff_sqrt: torch.Tensor,
+    t: torch.Tensor,
+    spec,
+    mapping,
 ):
-    a = a.index_select(0, t).view(-1, 1, 1, 1)
-    x = x0 * a.sqrt() + e * (1.0 - a).sqrt()
-    output = model(x, t.long())
-    if keepdim:
-        return (e - output).square().sum(dim=(1, 2, 3))
+    detail = {}
+    a_sqrt = a_sqrt.view(-1, 1, 1, 1)
+    a_coeff_sqrt = a_coeff_sqrt.view(-1, 1, 1, 1)
+    if mapping.log_polar:
+        x0_lp = utils.log_polar_convert(x0, spec)
+        x0_lp = utils.angle_centering(x0_lp, move_mean=True)
+        e = utils.angle_normalize(e)
+        x = x0_lp * a_sqrt + e * a_coeff_sqrt
     else:
-        return (e - output).square().sum(dim=(1, 2, 3)).mean(dim=0)
+        x = x0 * a_sqrt + e * a_coeff_sqrt
 
+    y = model(x, t)
+    if mapping.gaussian:
+        y, sig_y = y
 
-loss_registry = {
-    "simple": noise_estimation_loss,
-}
+        avg_diff = e - y
+        sig_eps = sig_y + mapping.gaussian_eps
+
+        if mapping.log_polar:
+            # scalar loss (NLL)
+            # Original design: log(std).mean() + (diff / std).square().mean() / 2
+            diff = avg_diff[..., 0]
+            sig = sig_eps[..., 0]
+            loss = torch.log(sig).mean() + (diff / sig).square().mean() / 2
+            detail["loss_scalar"] = loss.detach().clone()
+            detail["loss"] = loss
+
+            # angular loss (NLL)
+            # Original design: log(std).mean() + ((diff mod 2 pi) / std).square().mean() / 2
+            diff = avg_diff[..., 1]
+            sig = sig_eps[..., 1]
+            with torch.no_grad():
+                target_diff = utils.angle_centering(diff.clone(), move_mean=False)
+                moving_diff = diff - target_diff
+            diff = diff - moving_diff
+            loss = torch.log(sig).mean() + (diff / sig).square().mean() / 2
+            detail["loss_angular"] = loss.detach().clone()
+            detail["loss"] += loss
+        else:
+            detail["loss"] = (
+                torch.log(sig_eps).mean() + (avg_diff / sig_eps).square().mean() / 2
+            )
+    else:
+        detail["loss"] = (e - y).square().mean()
+
+    with torch.no_grad():
+        if mapping.log_polar:
+            x_hat = x0_lp + (a_coeff_sqrt / a_sqrt) * (e - y)
+            x_hat = utils.log_polar_invert(x_hat, spec)
+        else:
+            x_hat = x0 + (a_coeff_sqrt / a_sqrt) * (e - y)
+
+        signal = x0.norm(dim=-1, p=2)
+        noise = x_hat.norm(dim=-1, p=2) - signal
+        detail["SNR"] = 10 * (
+            signal.square().mean().clamp(min=1e-20).log10()
+            - noise.square().mean().clamp(min=1e-20).log10()
+        )
+
+    return detail

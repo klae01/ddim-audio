@@ -2,11 +2,17 @@ import math
 import sys
 
 import torch
-import torch.nn as nn
+import nn as nn
 
 sys.path.append("External")
 
-from UPU.layers.normalize.groupnorm import GroupNorm1D
+from UPU.layers import Gate
+
+
+def Normalize(channels, affine=True, group_cnt=None):
+    if group_cnt is None:
+        group_cnt = max(channels // 16, 1)
+    return nn.GroupNorm(group_cnt, channels, eps=1e-8, affine=affine)
 
 
 class Residual_Block(nn.Module):
@@ -14,20 +20,13 @@ class Residual_Block(nn.Module):
         super().__init__()
         self.channels = channels
 
-        self.norm = nn.Sequential(
-            *[
-                torch.nn.GroupNorm(
-                    num_groups=8, num_channels=channels, eps=1e-6, affine=True
-                )
-                for _ in range(3)
-            ]
-        )
-        torch.nn.init.zeros_(self.norm[-1].weight)
+        self.norm = nn.Sequential(*[Normalize(channels) for _ in range(3)])
+        nn.init.zeros_(self.norm[-1].weight)
         self.norm[-1].register_parameter("bias", None)
 
         self.conv = nn.Sequential(
             *[
-                torch.nn.Conv2d(
+                nn.Conv2d(
                     channels,
                     channels,
                     kernel_size=kernel_size,
@@ -45,12 +44,12 @@ class Residual_Block(nn.Module):
         x = input
 
         x = next(NORM)(x)
-        x = torch.nn.functional.silu(x)
+        x = nn.functional.silu(x)
         x = next(CONV)(x) + temb[..., None, None]
-        x = torch.nn.functional.silu(x)
+        x = nn.functional.silu(x)
         x = next(NORM)(x)
         x = next(CONV)(x)
-        x = torch.nn.functional.silu(x)
+        x = nn.functional.silu(x)
         x = next(NORM)(x)
 
         return input + x
@@ -59,7 +58,7 @@ class Residual_Block(nn.Module):
 class Upsample(nn.Module):
     def __init__(self, *, in_channels, out_channels):
         super().__init__()
-        self.conv = torch.nn.ConvTranspose2d(
+        self.conv = nn.ConvTranspose2d(
             in_channels, out_channels, kernel_size=4, stride=2, padding=1
         )
 
@@ -70,7 +69,7 @@ class Upsample(nn.Module):
 class Downsample(nn.Module):
     def __init__(self, *, in_channels, out_channels):
         super().__init__()
-        self.conv = torch.nn.Conv2d(
+        self.conv = nn.Conv2d(
             in_channels, out_channels, kernel_size=4, stride=2, padding=1
         )
 
@@ -79,69 +78,38 @@ class Downsample(nn.Module):
 
 
 @torch.no_grad()
-def Add_Encoding(data):
-    length = data.shape[-2]
-    channel = data.shape[-1]
-    position = torch.arange(length, dtype=data.dtype, device=data.device).unsqueeze(1)
-    div_term = torch.exp(
-        torch.arange(0, channel, 2, dtype=data.dtype, device=data.device)
-        * (-math.log(10000.0) / channel)
-    )
-    x = position * div_term
-    data[..., 0::2] += torch.sin(x)
-    data[..., 1::2] += torch.cos(x)
+def get_timestep_embedding(time, embedding_dim):
+    assert embedding_dim % 2 == 0
+    # 9.210340372 = ln(10000)
+    emb = (
+        -9.210340372 * torch.linspace(0, 1, embedding_dim // 2, device=time.device)
+    ).exp()
+    x = time[..., None].float() * emb
+    return torch.cat([x.sin(), x.cos()], dim=-1)
 
 
 class BetaEmbedding(nn.Module):
     def __init__(self, seq_length, channel_sz):
         super().__init__()
-        pos_ch = 128
+        self.pos_ch = 128
         emb_ch = 512
-        te = torch.zeros(seq_length, pos_ch)
-        Add_Encoding(te)
-        self.register_buffer("te", te)
 
         self.weight = nn.Sequential(
-            torch.nn.Linear(pos_ch, emb_ch, bias=True),
-            torch.nn.Linear(emb_ch, emb_ch, bias=True),
-            torch.nn.Linear(emb_ch, channel_sz, bias=True),
+            nn.Linear(self.pos_ch, emb_ch, bias=True),
+            nn.Linear(emb_ch, emb_ch, bias=True),
+            nn.Linear(emb_ch, channel_sz, bias=True),
         )
 
     def forward(self, input):
         WIGT = iter(self.weight)
 
-        x = self.te.index_select(0, input)
+        x = get_timestep_embedding(input, self.pos_ch)
         x = next(WIGT)(x)
-        x = torch.nn.functional.silu(x)
+        x = nn.functional.silu(x)
         x = next(WIGT)(x)
-        x = torch.nn.functional.silu(x)
+        x = nn.functional.silu(x)
         x = next(WIGT)(x)
 
-        return x
-
-
-class TransformerEmbedding(nn.Module):
-    def __init__(self, in_channels, config):
-        super().__init__()
-        self.te = None
-        self.LayerNorm = nn.LayerNorm(in_channels, eps=config.kwargs.layer_norm_eps)
-        self.projection = nn.Linear(in_channels, config.channels)
-        self.dropout = nn.Dropout(config.kwargs.hidden_dropout_prob)
-
-    def forward(self, input):
-        if self.te == None or self.te.size(0) > input.size(1):
-            size = input.size(1)
-            size = 2 ** math.ceil(math.log2(size))
-            self.te = torch.zeros(
-                size, input.size(2), dtype=input.dtype, device=input.device
-            )
-            Add_Encoding(self.te)
-
-        x = input + self.te[: input.size(1)]
-
-        x = self.LayerNorm(x)
-        x = self.projection(x)
-        x = self.dropout(x)
         return x
 
 
@@ -151,12 +119,17 @@ class Transformer_Module(nn.Module):
         super().__init__()
 
         exec(config.imports)
-        self.embedding = TransformerEmbedding(io_channels, config)
+        self.projection = nn.Sequential(
+            nn.Linear(io_channels, config.channels, bias=False),
+            Normalize(config.channels),
+        )
         self.encoder = eval(config.module)(eval(config.config)(**vars(config.kwargs)))
-        self.compute_out = nn.Linear(config.channels, io_channels)
+        self.compute_out = nn.Sequential(
+            nn.Linear(config.channels, io_channels, bias=False), Normalize(io_channels)
+        )
 
     def forward(self, x):
-        x = self.embedding(x)
+        x = self.projection(x)
         x = self.encoder(
             x,
             output_hidden_states=False,
@@ -167,11 +140,25 @@ class Transformer_Module(nn.Module):
         return x
 
 
+class G_mapping(nn.Module):
+    def __init__(self, in_features, out_features):
+        super().__init__()
+        self.weight = nn.Conv2d(in_features, out_features * 2, 3, 1, 1, bias=True)
+        self.weight.bias.data.zero_()
+
+    def forward(self, input):
+        x = input
+        x = self.weight(x)
+        μ, σ = x.chunk(2, 1)
+        return μ, torch.sigmoid(σ)
+
+
 class Model(nn.Module):
     def __init__(self, config):
         # get full config
 
         self.config = config.model
+        self.mapping = config.mapping
         assert len(self.config.ch) == len(self.config.krn) == len(self.config.res)
         super().__init__()
 
@@ -188,23 +175,25 @@ class Model(nn.Module):
 
         self.down_modules = nn.ModuleList()
         self.down_modules.append(
-            torch.nn.Conv2d(
-                self.config.channels,
+            nn.Conv2d(
+                self.config.io.channels,
                 self.config.ch[0],
-                kernel_size=3,
+                kernel_size=7,
                 stride=1,
                 padding=1,
             )
         )
         self.up_modules = nn.ModuleList()
         self.up_modules.append(
-            torch.nn.Conv2d(
+            nn.Conv2d(
                 self.config.ch[0],
-                self.config.channels,
+                self.config.io.channels,
                 kernel_size=3,
                 stride=1,
                 padding=1,
             )
+            if self.mapping.gaussian
+            else G_mapping(self.config.ch[0], self.config.io.channels)
         )
         for prev_ch, ch, krn, res in zip(
             [-1] + self.config.ch[:-1], self.config.ch, self.config.krn, self.config.res
@@ -228,15 +217,15 @@ class Model(nn.Module):
 
         self.transformer = Transformer_Module(
             self.config.ch[-1]
-            * (self.config.f_size // (2 ** (len(self.config.ch) - 1))),
+            * (self.config.io.f_size // (2 ** (len(self.config.ch) - 1))),
             self.config.transformers,
         )
         if self.config.dtype:
             self.type(self.config.dtype)
 
     def forward(self, input, t):
-        # input: [B, C, T, F]
-        # transformer i/o: [B, T, F*C]
+        # input: [B, T, F, C]
+        # transformer i/o: [B, T, C * F]
         # conv input: [B, C, T, F]
 
         if (
@@ -249,11 +238,11 @@ class Model(nn.Module):
         temb = torch.split(temb, self.embedding_size, dim=-1)
         temb = iter(temb)
 
-        x = input
+        x = input.permute(0, 3, 1, 2)
         # downsampling
         hidden = []
         for lays in self.down_modules:
-            if type(lays) != torch.nn.modules.container.ModuleList:
+            if type(lays) != nn.modules.container.ModuleList:
                 lays = [lays]
 
             for lay in lays:
@@ -282,7 +271,7 @@ class Model(nn.Module):
         hidden = iter(hidden[::-1])
         for lays in self.up_modules:
             x = x + next(hidden)
-            if type(lays) != torch.nn.modules.container.ModuleList:
+            if type(lays) != nn.modules.container.ModuleList:
                 lays = [lays]
 
             for lay in lays:
@@ -291,4 +280,4 @@ class Model(nn.Module):
                 else:
                     x = lay(x)
 
-        return x
+        return x.permute(0, 2, 3, 1)
