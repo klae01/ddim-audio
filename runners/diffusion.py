@@ -147,8 +147,9 @@ class Diffusion(object):
                 epoch,
                 step,
                 self.log_data_spec,
-                ema_helper,
             ]
+            if self.config.model.ema:
+                states.append(ema_helper.state_dict())
 
             torch.save(
                 states,
