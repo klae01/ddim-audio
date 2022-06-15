@@ -20,21 +20,22 @@ class Residual_Block(nn.Module):
         super().__init__()
         self.channels = channels
 
-        self.norm = nn.Sequential(*[Normalize(channels) for _ in range(3)])
-        nn.init.zeros_(self.norm[-1].weight)
-        self.norm[-1].register_parameter("bias", None)
+        self.norm = nn.ModuleList(
+            [
+                Normalize(channels),
+                Normalize(channels // 4),
+                Normalize(channels // 4),
+                Normalize(channels),
+            ]
+        )
 
-        self.conv = nn.Sequential(
-            *[
+        self.conv = nn.ModuleList(
+            [
+                nn.Conv2d(channels, channels // 4, 1, 1, 0),
                 nn.Conv2d(
-                    channels,
-                    channels,
-                    kernel_size=kernel_size,
-                    stride=1,
-                    padding=kernel_size // 2,
-                    bias=bias,
-                )
-                for bias in [False, True]
+                    channels // 4, channels // 4, kernel_size, 1, kernel_size // 2
+                ),
+                nn.Conv2d(channels // 4, channels, 1, 1, 0),
             ]
         )
 
@@ -44,12 +45,13 @@ class Residual_Block(nn.Module):
         x = input
 
         x = next(NORM)(x)
-        x = nn.functional.silu(x)
         x = next(CONV)(x) + temb[..., None, None]
         x = nn.functional.silu(x)
         x = next(NORM)(x)
         x = next(CONV)(x)
         x = nn.functional.silu(x)
+        x = next(NORM)(x)
+        x = next(CONV)(x)
         x = next(NORM)(x)
 
         return input + x
@@ -164,7 +166,7 @@ class Model(nn.Module):
         super().__init__()
 
         embedding_size = [
-            temb_ch
+            temb_ch // 4
             for res_cnt, temb_ch in zip(self.config.res, self.config.ch)
             for _ in range(res_cnt)
         ]
