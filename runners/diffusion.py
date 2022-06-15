@@ -81,7 +81,13 @@ class Diffusion(object):
     ):
         n = x.size(0)
         e = torch.randn_like(x)
-        t = torch.rand(n, device="cpu") * (self.num_timesteps - 1)
+        if self.config.training.time_balance_sampling:
+            t_max = self.num_timesteps - 1
+            t = t_max / n * torch.rand(n)
+            t += torch.linspace(0, t_max, n + 1)[:-1]
+        else:
+            t = torch.rand(n, device="cpu") * (self.num_timesteps - 1)
+
         a, a_coeff, t = [
             I.type(self.config.model.dtype) for I in [*self.get_mix_ratio(t.numpy()), t]
         ]
