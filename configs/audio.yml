@@ -1,11 +1,14 @@
 define: &f_size 256
 define: &low_level_ch 2
-define: &flatten_ch 512
 define: &t_size 1024
-define: &axis_format CTF
+define: &axis_format TFC
 define: &virtual_samplerate 48000
 define: &HPI False
 
+mapping:
+    log_polar: False
+    gaussian: False
+    gaussian_eps: 0.00001
 
 data:
     dataset: AUDIO
@@ -13,19 +16,22 @@ data:
     dataset_kwargs:
         f_size: *f_size
         t_size: *t_size
-        virtual_samplerate: *virtual_samplerate
+        samplerate: *virtual_samplerate
         use_numpy: False
-        dtype: torch.float
+        serve_dtype: torch.float
         device: cuda
         axis: *axis_format
         HPI: *HPI
-    pfft_format: *axis_format
+    
     num_workers: 0
+
+    axis: *axis_format
 
 model:
     dtype: torch.cuda.FloatTensor
     type: simple
-
+    heads: 8
+    
     transformers:
         imports: "import transformers; from transformers.models.fnet.modeling_fnet import FNetEncoder"
         module: FNetEncoder
@@ -40,27 +46,25 @@ model:
             layer_norm_eps: 0.000001
         channels: 512
         dtype: torch.cuda.FloatTensor
-
-    channels: *low_level_ch
-    t_size: *t_size
-    f_size: *f_size
+    
+    io:
+        channels: *low_level_ch
+        t_size: *t_size
+        f_size: *f_size
 
     ch: [32, 64, 96, 128, 192, 256]
     krn: [3, 3, 3, 3, 3, 3]
     res: [2, 2, 3, 3, 3, 3]
-    
+
     var_type: fixedlarge
-    ema_rate: 0.9999
+    ema_rate: 0.999
     ema: True
 
 diffusion:
-    beta_schedule: linear
-    beta_start: 0.0001
-    beta_end: 0.02
-    num_diffusion_timesteps: 1000
+    betas: "np.linspace(1e-4, 2e-2, 1000)"
 
 training:
-    batch_size: 14
+    batch_size: 48
     n_epochs: null
     n_iters: 5000000
     snapshot_freq: 5000
@@ -70,6 +74,7 @@ sampling:
     batch_size: 64
     last_only: True
     denoise: True
+    denoise_device: cuda
     HPI: *HPI
     virtual_samplerate: *virtual_samplerate
 
@@ -85,20 +90,20 @@ optimization:
             optimizer: "AdamW"
             warmup: 10000
             lr: 0.0005
+            min_rate: 0.2
             beta: [0.9, 0.998]
             amsgrad: false
             eps: 0.000001
         default:
             top_level_name: []
             weight_decay: 0.00001
-            optimizer: "AdaBelief"
-            warmup: 1000
-            lr: 0.0003
+            optimizer: "AdamW"
+            warmup: 10000
+            lr: 0.0005
+            min_rate: 0.2
             beta: [0.9, 0.999]
             amsgrad: false
             eps: 0.00000001
-            clip_step: null
-            norm_ord: 2
     
     grad_norm:
         transformer:
