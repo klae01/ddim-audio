@@ -4,6 +4,11 @@ import sys
 import torch
 import torch.nn as nn
 
+try:
+    from rfconv import RFConv2d
+except:
+    ...
+
 sys.path.append("External")
 
 from UPU.layers import Gate
@@ -16,7 +21,7 @@ def Normalize(channels, affine=True, group_cnt=None):
 
 
 class Residual_Block(nn.Module):
-    def __init__(self, *, channels, kernel_size=3):
+    def __init__(self, *, channels, kernel_size, config):
         super().__init__()
         self.channels = channels
 
@@ -31,11 +36,11 @@ class Residual_Block(nn.Module):
 
         self.conv = nn.ModuleList(
             [
-                nn.Conv2d(channels, channels // 4, 1, 1, 0),
-                nn.Conv2d(
+                eval(config.conv)(channels, channels // 4, 1, 1, 0),
+                eval(config.conv)(
                     channels // 4, channels // 4, kernel_size, 1, kernel_size // 2
                 ),
-                nn.Conv2d(channels // 4, channels, 1, 1, 0),
+                eval(config.conv)(channels // 4, channels, 1, 1, 0),
             ]
         )
 
@@ -58,7 +63,7 @@ class Residual_Block(nn.Module):
 
 
 class Upsample(nn.Module):
-    def __init__(self, *, in_channels, out_channels):
+    def __init__(self, *, in_channels, out_channels, config):
         super().__init__()
         self.conv = nn.ConvTranspose2d(
             in_channels, out_channels, kernel_size=4, stride=2, padding=1
@@ -69,9 +74,9 @@ class Upsample(nn.Module):
 
 
 class Downsample(nn.Module):
-    def __init__(self, *, in_channels, out_channels):
+    def __init__(self, *, in_channels, out_channels, config):
         super().__init__()
-        self.conv = nn.Conv2d(
+        self.conv = eval(config.conv)(
             in_channels, out_channels, kernel_size=4, stride=2, padding=1
         )
 
@@ -144,9 +149,11 @@ class Transformer_Module(nn.Module):
 
 
 class G_mapping(nn.Module):
-    def __init__(self, in_features, out_features):
+    def __init__(self, in_features, out_features, config):
         super().__init__()
-        self.weight = nn.Conv2d(in_features, out_features * 2, 3, 1, 1, bias=True)
+        self.weight = eval(config.conv)(
+            in_features, out_features * 2, 3, 1, 1, bias=True
+        )
         self.weight.bias.data.zero_()
 
     def forward(self, input):
@@ -162,6 +169,8 @@ class Model(nn.Module):
 
         self.config = config.model
         self.mapping = config.mapping
+        submodule = config.model.submodule
+
         assert len(self.config.ch) == len(self.config.krn) == len(self.config.res)
         super().__init__()
 
@@ -176,7 +185,7 @@ class Model(nn.Module):
 
         self.down_modules = nn.ModuleList()
         self.down_modules.append(
-            nn.Conv2d(
+            eval(submodule.conv)(
                 self.config.io.channels,
                 self.config.ch[0],
                 kernel_size=7,
@@ -186,7 +195,7 @@ class Model(nn.Module):
         )
         self.up_modules = nn.ModuleList()
         self.up_modules.append(
-            nn.Conv2d(
+            eval(submodule.conv)(
                 self.config.ch[0],
                 self.config.io.channels,
                 kernel_size=3,

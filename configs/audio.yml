@@ -52,6 +52,9 @@ model:
         t_size: *t_size
         f_size: *f_size
 
+    submodule:
+        conv: nn.Conv2d
+
     ch: [32, 64, 96, 128, 192, 256]
     krn: [3, 3, 3, 3, 3, 3]
     res: [2, 2, 3, 3, 3, 3]
